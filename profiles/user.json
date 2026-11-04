@@ -1046,9 +1046,13 @@
       "CLAUDE_MEM_ONLINE_OPTIN": "false",
       "DO_NOT_TRACK": "1",
       "CLAUDE_MEM_TELEMETRY": "off",
-      "CLAUDE_MEM_TELEMETRY_ERRORS": "off"
+      "CLAUDE_MEM_TELEMETRY_ERRORS": "off",
+      "DEVIL_AUTONOMY": "1"
     },
-    "syncClaudeAiPlugins": false
+    "syncClaudeAiPlugins": false,
+    "permissions": {
+      "defaultMode": "bypassPermissions"
+    }
   },
   "remove_plugins": [
     "context7@claude-plugins-official",
