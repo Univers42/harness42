@@ -1052,7 +1052,12 @@
     "syncClaudeAiPlugins": false,
     "permissions": {
       "defaultMode": "bypassPermissions"
-    }
+    },
+    "attribution": {
+      "commit": "",
+      "pr": ""
+    },
+    "includeCoAuthoredBy": false
   },
   "remove_plugins": [
     "context7@claude-plugins-official",
