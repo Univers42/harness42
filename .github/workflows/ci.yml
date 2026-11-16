@@ -44,7 +44,7 @@ jobs:
 
       - name: python syntax
         if: always()
-        run: python3 -m py_compile hooks/scripts/*.py
+        run: python3 -m py_compile hooks/scripts/*.py tools/lib/*.py
 
       - name: json is valid
         if: always()

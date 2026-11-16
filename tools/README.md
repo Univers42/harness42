@@ -23,6 +23,7 @@ and 2 for a name it does not know. An enabled plugin has its `bin/` on the Bash 
 | `untested.sh` | "What needs a test before I touch it?" (the TDD worklist) | source vs tests |
 | `dupes.sh` | "What should I extract into the library?" | repeated blocks |
 | `quality.sh` | "Is it the highest quality — strictly?" (the gate) | every strict linter / SAST / audit |
+| `flow.sh` | "Run the gate the same way every time": a workflow written once as TOML (`flows/`, or a host's `.claude/flows/`), run by code; steps, gates and a return block in one report | the flow file, then whatever its steps run; reports under `.claude/cache/runs/` |
 | `watch.sh` | "Run this without ever hanging" — hard + idle timeouts around any command | wraps a command |
 | `selfcheck.sh` | "Does this config tell the truth about itself?" (the drift gate) | every doc + every frontmatter block |
 | `setup.sh` | "What is this host still missing from the kit?" — seeds rules, permissions, CLAUDE.md, OpenCode wiring, tracker, gitignore | the host's `.claude/`, `opencode.json`, `.gitignore` |
@@ -47,6 +48,9 @@ devil quality --with-tests --no-audit
 devil quality --logs=DIR              # also keep each gate's log + DIR/results.tsv
 devil preflight                      # verify .env / secrets / toolchain before building
 devil watch --idle 60 -- make build  # run anything without hanging (exit 124 = killed)
+devil flow list                      # the flows this host can run
+devil flow run gate --base main      # run one: 0 green, 1 failed, 2 invalid, 124 hung
+devil flow show                      # the newest run's report
 
 devil selfcheck                      # this config's own integrity (exit 1 = drift)
 devil setup --check                  # is this host fully seeded? (exit 1 = a stage differs)
