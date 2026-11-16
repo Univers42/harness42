@@ -9,10 +9,13 @@
 # Canonical order (a failure early is cheaper to fix than one late):
 #   format -> lint -> types -> sast -> audit
 #
-# Usage: quality.sh [--summary] [--no-audit] [--with-tests]
+# Usage: quality.sh [--summary] [--no-audit] [--with-tests] [--logs=DIR]
 #   --summary     totals + only the FAIL/SKIP rows
 #   --no-audit    skip network/registry audits (offline / fast loop)
 #   --with-tests  also run the detected test command (see facts.sh)
+#   --logs=DIR    keep each gate's output in DIR/<gate>.log and the board in
+#                 DIR/results.tsv (status, gate, category, log), so a reviewer
+#                 reads the findings instead of re-running the linter
 #
 # Exit: 0 if no gate FAILED (skips are not failures); 1 if any gate FAILED.
 set -uo pipefail # not -e: a failing gate is data, not a script error
@@ -23,17 +26,25 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUMMARY=0
 AUDIT=1
 WITH_TESTS=0
+LOGS=""
 for a in "$@"; do
   case "$a" in
   --summary) SUMMARY=1 ;;
   --no-audit) AUDIT=0 ;;
   --with-tests) WITH_TESTS=1 ;;
+  --logs=?*) LOGS="${a#--logs=}" ;;
   *)
     echo "quality.sh: unknown arg '$a'" >&2
     exit 2
     ;;
   esac
 done
+
+# Absolute before the cd below, so a relative --logs means the caller's cwd.
+if [ -n "$LOGS" ]; then
+  mkdir -p "$LOGS" && LOGS="$(cd "$LOGS" && pwd)" || exit 2
+  printf 'status\tgate\tcategory\tlog\n' >"$LOGS/results.tsv"
+fi
 
 ROOT="$(repo_root)"
 cd "$ROOT" || exit 1
@@ -64,21 +75,28 @@ resolve() {
 
 record() { RESULTS+="$1	$2	$3	$4"$'\n'; } # status tool category note
 
+# One results.tsv row per relevant gate; a SKIP has no log, written as "-".
+logrow() { [ -z "$LOGS" ] || printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "${4:--}" >>"$LOGS/results.tsv"; }
+
 # check <category> <label> <relevant 0|1> <bin|""> <gate-fn>
 check() {
-  local cat="$1" label="$2" rel="$3" bin="$4" fn="$5" rc
+  local cat="$1" label="$2" rel="$3" bin="$4" fn="$5" rc log=/dev/null
   [ "$rel" = 1 ] || return 0
   if [ -z "$bin" ]; then
     record SKIP "$label" "$cat" "not installed"
+    logrow SKIP "$label" "$cat"
     return 0
   fi
-  # The gate's own output is noise here: the board reports status, not logs.
-  if "$fn" "$bin" >/dev/null 2>&1; then rc=0; else rc=$?; fi
+  # The board reports status; the gate's own output goes to --logs, else nowhere.
+  [ -z "$LOGS" ] || log="$LOGS/$(printf '%s' "$label" | tr -c 'A-Za-z0-9_-' '-').log"
+  if "$fn" "$bin" >"$log" 2>&1; then rc=0; else rc=$?; fi
   RAN=$((RAN + 1))
   if [ "$rc" -eq 0 ]; then
     record PASS "$label" "$cat" ""
+    logrow PASS "$label" "$cat" "${LOGS:+$log}"
   else
-    record FAIL "$label" "$cat" "exit $rc"
+    record FAIL "$label" "$cat" "exit $rc${LOGS:+ · log: $log}"
+    logrow FAIL "$label" "$cat" "${LOGS:+$log}"
     FAILED=$((FAILED + 1))
   fi
 }
@@ -137,14 +155,14 @@ TS=$({ manifest tsconfig.json; } && echo 1 || echo 0)
 # A .claude payload's own integrity is a gate like any other: this repo once
 # documented 4 agents, 5 rules and a settings.json that did not exist, and
 # nothing caught it. Only relevant when the tree IS such a payload.
-g_selfcheck() { "$1" "$DIR/selfcheck.sh" --summary >/dev/null 2>&1; }
+g_selfcheck() { "$1" "$DIR/selfcheck.sh" --summary; }
 check config selfcheck \
   "$([ -f "$DIR/selfcheck.sh" ] && [ -d "$ROOT/rules" ] && [ -d "$ROOT/agents" ] && echo 1 || echo 0)" \
   "$(resolve bash)" g_selfcheck
 
 # One version source, proved: plugin.json against the changelog heading, and no
 # second version hiding in the marketplace manifest.
-g_release() { "$1" "$DIR/release.sh" --check >/dev/null 2>&1; }
+g_release() { "$1" "$DIR/release.sh" --check; }
 check config release \
   "$([ -f "$DIR/release.sh" ] && manifest .claude-plugin/plugin.json && echo 1 || echo 0)" \
   "$(resolve bash)" g_release
@@ -152,7 +170,7 @@ check config release \
 # Selfcheck asks whether the config is truthful; skillcheck asks whether it is
 # managed (lifecycle metadata, description form, resolving references). Both are
 # the same claim from two directions, so both are gates.
-g_skillcheck() { "$1" "$DIR/skillcheck.sh" --summary >/dev/null 2>&1; }
+g_skillcheck() { "$1" "$DIR/skillcheck.sh" --summary; }
 check config skillcheck \
   "$([ -f "$DIR/skillcheck.sh" ] && [ -d "$ROOT/skills" ] && [ -d "$ROOT/commands" ] && echo 1 || echo 0)" \
   "$(resolve bash)" g_skillcheck
@@ -160,7 +178,7 @@ check config skillcheck \
 # The README tables and the /devil:guide router come from one generator, so a
 # table that drifted from the frontmatter is a stale claim in the first document
 # a reader opens.
-g_index() { "$1" "$DIR/index.sh" --check >/dev/null 2>&1; }
+g_index() { "$1" "$DIR/index.sh" --check; }
 check config index \
   "$([ -f "$DIR/index.sh" ] && [ -f "$ROOT/README.md" ] && echo 1 || echo 0)" \
   "$(resolve bash)" g_index
@@ -169,22 +187,22 @@ check config index \
 # commands and rules, so it gets the same treatment as the version source. One
 # row per harness, because a target whose sources moved must be able to fail on
 # its own and name itself.
-g_export() { "$1" "$DIR/export.sh" --check opencode >/dev/null 2>&1; }
+g_export() { "$1" "$DIR/export.sh" --check opencode; }
 check config export \
   "$([ -f "$DIR/export.sh" ] && [ -d "$ROOT/dist/opencode" ] && echo 1 || echo 0)" \
   "$(resolve bash)" g_export
 
 # Same claim about the same one generator, for the Codex dialect. A generated
 # harness copy nobody gates is a hand-kept copy with extra steps.
-g_export_codex() { "$1" "$DIR/export.sh" --check codex >/dev/null 2>&1; }
+g_export_codex() { "$1" "$DIR/export.sh" --check codex; }
 check config export_codex \
   "$([ -f "$DIR/export.sh" ] && [ -d "$ROOT/dist/codex" ] && echo 1 || echo 0)" \
   "$(resolve bash)" g_export_codex
-g_export_gemini() { "$1" "$DIR/export.sh" --check gemini >/dev/null 2>&1; }
+g_export_gemini() { "$1" "$DIR/export.sh" --check gemini; }
 check config export_gemini \
   "$([ -f "$DIR/export.sh" ] && [ -d "$ROOT/dist/gemini" ] && echo 1 || echo 0)" \
   "$(resolve bash)" g_export_gemini
-g_export_copilot() { "$1" "$DIR/export.sh" --check copilot >/dev/null 2>&1; }
+g_export_copilot() { "$1" "$DIR/export.sh" --check copilot; }
 check config export_copilot \
   "$([ -f "$DIR/export.sh" ] && [ -d "$ROOT/dist/copilot" ] && echo 1 || echo 0)" \
   "$(resolve bash)" g_export_copilot

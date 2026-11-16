@@ -44,6 +44,7 @@ devil digest --refresh               # rebuild after big changes
 devil codemap                        # full queryable index
 devil quality                        # the strict gate (exit 1 = a real failure)
 devil quality --with-tests --no-audit
+devil quality --logs=DIR              # also keep each gate's log + DIR/results.tsv
 devil preflight                      # verify .env / secrets / toolchain before building
 devil watch --idle 60 -- make build  # run anything without hanging (exit 124 = killed)
 
