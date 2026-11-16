@@ -1,0 +1,82 @@
+---
+name: flow
+description: >
+  Run the gate as code: one `devil flow run` fetches the diff, runs lint and tests, makes
+  one tool-less review call and writes the report, in place of a fan-out of agents.
+  Use when a change is ready to check before merge, or a diff needs a review.
+  Auto-triggers on: "run the gate", "review my diff", "is this ready to merge"
+allowed-tools: Bash, Read
+metadata:
+  stage: beta
+  since: "1.2.0"
+---
+
+# Flow
+
+A gate is the same five moves every time: fetch the diff, run the linters, run the tests,
+review, report. An agent that re-derives them each run pays for the same facts again, and
+a fan-out of agents pays once per agent. A flow is that workflow written once
+(`flows/gate.toml`) and run by code: the only model call is the review, and it gets the
+diff and the gate results handed to it instead of re-running them.
+
+## 1. Run it once
+
+```sh
+devil flow run gate --base <branch point> --spec .claude/cache/spec.md
+```
+
+- `--base` is where the change starts: the branch point, or the sha the work began at.
+  Without it the diff is taken against `origin/HEAD`, then `main`, then `master`.
+- `--spec` is the contract the review checks the diff against. Without one, the review
+  reports "no contract was given" as a Spec finding, so write the spec down first.
+- Run it in the background and wait for the exit, without polling: the gate runs the whole
+  test suite and can outlast a foreground shell call.
+- `devil flow run review` is the review alone, for a change whose gates already ran.
+- `devil flow run gate --dry-run` prints every step and runs none of them.
+
+## 2. Act on the exit code
+
+| Exit | Meaning | Do |
+| --- | --- | --- |
+| 0 | every step green, review APPROVE | done: quote the return block |
+| 1 | a step failed, or the review asked for changes | fix what `next:` names, then run the flow again |
+| 124 | a step hit its watchdog | find the hang in the log `next:` names; never raise the timeout to pass |
+| 3 | the review gave no verdict | run the `reviewer` and `security` agents once each on the same diff |
+| 2 | bad usage, or an invalid flow | `devil flow check` names the problem |
+
+stdout ends with the return block of `templates/agent-brief.md` and a `report:` line. That
+block is the result: `status`, the exit of every step, `changed`, `deviations` and `next`.
+
+## 3. Read the report only when blocked
+
+`devil flow show` prints the newest `report.md`: the step table, every gate with its log,
+the review's Standards, Spec and Security tables, and the review's cost. A gate's log is in
+the run folder, so a failing lint line is read there, never re-derived by running the
+linter again.
+
+A green run needs nothing more. `deviations:` can still name files the review never saw
+(the diff was over `max_diff_bytes`); review those by hand.
+
+## Never
+
+- Spawn the `reviewer` or `security` agent on a run that exited 0: the review already ran.
+- Re-run `devil quality` to find a `file:line` the run's logs already hold.
+- Edit a run folder: it is the record of what ran, and the next run prunes it.
+- Retry an exit 3 with the flow: it is the signal to fall back to the agents.
+
+## Without `devil`
+
+A host where `devil` is not on PATH (the generated OpenCode, Codex, Gemini and Copilot
+trees ship no `tools/`) runs the same gate by hand, once: the project's linters and tests,
+then the `reviewer` and `security` agents once each on the diff, then the return block.
+
+## Report
+
+The flow's return block as printed, then:
+
+| Flow | Run id | Exit | Verdict | Blocking findings | Cost |
+| --- | --- | ---: | --- | ---: | ---: |
+| | | | | | |
+
+- The `report:` path, and the fix made for each `next:` before the run that went green.
+- Files named in `deviations:` that the review never saw, and who reviewed them.

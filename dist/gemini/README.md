@@ -103,4 +103,4 @@ than as a pass.
 
 ---
 
-Generated from: 11 agents, 19 commands, 22 skills, 13 always-on rules, 7 path-scoped rule skills.
+Generated from: 11 agents, 19 commands, 24 skills, 13 always-on rules, 7 path-scoped rule skills.

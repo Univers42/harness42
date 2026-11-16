@@ -178,4 +178,4 @@ this check.
 
 ---
 
-Generated from: 22 skills, 13 always-on rules, 19 commands.
+Generated from: 24 skills, 13 always-on rules, 19 commands.
