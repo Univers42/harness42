@@ -4,6 +4,7 @@ survive compaction.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -63,6 +64,10 @@ def session_start(data):
     on every session after the first (rules/memory.md: prefer a tool that cannot
     go stale over a memory that can).
     """
+    # A flow's review step is a nested `claude -p` that gets its context from the
+    # flow; a briefing here would only cost tokens it was never meant to read.
+    if os.environ.get("DEVIL_FLOW_CHILD") == "1":
+        sys.exit(0)
     parts = []
     preamble = ""
     digest = PLUGIN_ROOT / "tools" / "digest.sh"

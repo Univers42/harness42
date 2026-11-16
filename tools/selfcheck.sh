@@ -80,11 +80,11 @@ check_dangling() {
   local doc ref target seen=""
   while read -r doc; do
     [ -n "$doc" ] || continue
-    grep -oE '(^|[^A-Za-z0-9_./-])(\.claude/)?(agents|rules|commands|workflows|skills|tools|doc|scripts|templates|bin|hooks|tests)/[A-Za-z0-9_./-]+' "$doc" 2>/dev/null |
+    grep -oE '(^|[^A-Za-z0-9_./-])(\.claude/)?(agents|rules|commands|workflows|skills|tools|doc|scripts|templates|bin|hooks|tests|flows)/[A-Za-z0-9_./-]+' "$doc" 2>/dev/null |
       sed -E 's|^[^A-Za-z0-9_.]||; s|^\.claude/||; s|[.]+$||' | sort -u | while read -r ref; do
       case "$ref" in
       */) continue ;;
-      *.md | *.sh | *.py | *.json | bin/*) target="$ref" ;;
+      *.md | *.sh | *.py | *.json | flows/*.toml | bin/*) target="$ref" ;;
       *) continue ;; # a bare directory is not a claim about a file
       esac
       # A markdown link is relative to its own file, so resolve both ways:

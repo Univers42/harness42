@@ -1,0 +1,30 @@
+# The gate, written once: fetch the diff, run lint and tests, then one review.
+# `devil flow run gate --base <branch point> --spec .claude/cache/spec.md`
+description = "diff, lint and tests (devil quality --with-tests), then one headless review"
+
+[[step]]
+name = "diff"
+type = "run"
+run = 'devil orch diff ${FLOW_BASE:+--base "$FLOW_BASE"} "$FLOW_OUT"'
+timeout = 120
+
+[[step]]
+name = "nonempty"
+type = "assert"
+run = 'test -s "$FLOW_OUT/changed.txt"'
+message = "nothing changed against the base: commit or stage the work, or pass --base"
+
+# Caveat: a test suite can stay silent for minutes, so the watchdog judges this step by
+# its timeout only (idle = 0); a suite that hangs is killed at 30 minutes, not sooner.
+[[step]]
+name = "quality"
+type = "run"
+run = 'devil quality --with-tests --logs="$FLOW_RUN_DIR/quality"'
+timeout = 1800
+idle = 0
+
+[[step]]
+name = "review"
+type = "review"
+model = "opus"
+budget_usd = 3

@@ -8,11 +8,13 @@ Called through tools/flow.sh (`devil flow`), which sets FLOW_KIT, FLOW_ROOT and 
   run FLOW [--base REF] [--spec FILE] [--dry-run]
 
 FLOW is a name, looked up in <host>/.claude/flows/ then <kit>/flows/, or a path to a .toml
-file. Each step becomes steps/<name>.sh, run by tools/orch/gate.sh under tools/watch.sh,
-from the host root, with stdin closed. The first failure stops the flow and the steps after
-it are SKIP. Steps hand data to later steps as files in $FLOW_OUT.
+file. Each run or assert step becomes steps/<name>.sh, run by tools/orch/gate.sh under
+tools/watch.sh, from the host root, with stdin closed; a review step is one headless claude
+call (flow_review.py). The first failure stops the flow and the steps after it are SKIP, so
+a review only ever judges a green run. Steps hand data on as files in $FLOW_OUT.
 
-Exit: 0 green, 1 a step failed, 2 usage or an invalid flow, 124 a step hit its watchdog.
+Exit: 0 green, 1 a step failed or the review asked for changes, 2 usage or an invalid flow,
+3 the review gave no verdict (fall back to the reviewer agents), 124 a step hit its watchdog.
 
 Caveat: a step that exits 124 by itself (its own `timeout`, say) is reported as a watchdog
 TIMEOUT, and liveness is output-based (watch.sh): a step silent for longer than its `idle`
@@ -31,12 +33,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I drops the script dir
 import flow_report  # noqa: E402
+import flow_review  # noqa: E402
 from flow_spec import KIT, ROOT, Invalid, all_flows, load  # noqa: E402
 
 RUNS = Path(os.environ.get("FLOW_CACHE", ROOT / ".claude" / "cache")) / "runs"
 RUN_ID = re.compile(r"\d{8}-\d{6}-[a-z][a-z0-9-]*-\d+")
 GATE_LINE = re.compile(r"(PASS|FAIL) +(\S+) +exit=(\d+) +expect=(\S+) +(\d+)s")
 KEEP_RUNS = 20
+STOP_CODE = {"TIMEOUT": 124, "ERROR": 3}
 
 
 # --- running -----------------------------------------------------------------
@@ -137,11 +141,14 @@ def run_steps(flow, run_dir, env):
             results.append(dict(step, status="SKIP", rc=None, seconds=0, log=""))
             continue
         print(f"flow: [{i}/{total}] {step['name']} ...", file=sys.stderr, flush=True)
-        result = run_step(flow, step, run_dir, env)
+        if step["type"] == "review":
+            result = flow_review.run(step, run_dir, env)
+        else:
+            result = run_step(flow, step, run_dir, env)
         print(f"flow: {result['line']}", file=sys.stderr, flush=True)
         results.append(result)
         stopped = None if result["status"] == "PASS" else result
-    code = 0 if stopped is None else 124 if stopped["status"] == "TIMEOUT" else 1
+    code = 0 if stopped is None else STOP_CODE.get(stopped["status"], 1)
     return results, code
 
 
@@ -175,17 +182,26 @@ def prune(keep=KEEP_RUNS):
         shutil.rmtree(RUNS / name)
 
 
+def _plan(step):
+    """What a step will do, for --dry-run."""
+    if step["type"] != "review":
+        limits = f"idle {step['idle']}s, expect {step['expect']}"
+        return [limits, *step["run"].strip().splitlines()]
+    rubric = ", ".join(os.path.relpath(r, KIT) for r in step["rubric"])
+    return [
+        f"claude -p --model {step['model']}, budget ${step['budget_usd']}, no tools",
+        f"diff cut at {step['max_diff_bytes']} bytes; rubric: {rubric}",
+    ]
+
+
 def dry_run(flow, base, spec):
     print(f"flow {flow['name']} ({flow['source']}: {flow['path']})")
     print(
         f"  {flow['description']}\n  base: {base or 'default'}, spec: {spec or 'none'}"
     )
     for i, step in enumerate(flow["steps"], 1):
-        limits = f"timeout {step['timeout']}s, idle {step['idle']}s"
-        print(
-            f"  {i}. {step['name']} [{step['type']}] {limits}, expect {step['expect']}"
-        )
-        print("\n".join(f"       {line}" for line in step["run"].strip().splitlines()))
+        print(f"  {i}. {step['name']} [{step['type']}] timeout {step['timeout']}s")
+        print("\n".join(f"       {line}" for line in _plan(step)))
     print("dry run: nothing was executed")
     return 0
 

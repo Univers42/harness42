@@ -1,0 +1,21 @@
+# The review alone, for a change whose gates already ran (or have none to run).
+# `devil flow run review --base <branch point> [--spec FILE]`
+description = "diff, then one headless review with the reviewer and security rubrics"
+
+[[step]]
+name = "diff"
+type = "run"
+run = 'devil orch diff ${FLOW_BASE:+--base "$FLOW_BASE"} "$FLOW_OUT"'
+timeout = 120
+
+[[step]]
+name = "nonempty"
+type = "assert"
+run = 'test -s "$FLOW_OUT/changed.txt"'
+message = "nothing changed against the base: commit or stage the work, or pass --base"
+
+[[step]]
+name = "review"
+type = "review"
+model = "opus"
+budget_usd = 3

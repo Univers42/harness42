@@ -233,6 +233,12 @@ case "$out" in
 *"Build briefing"*"$HOST_P"*) ok "SessionStart digests CLAUDE_PROJECT_DIR" ;;
 *) no "SessionStart should brief $HOST_P, got: ${out:0:160}" ;;
 esac
+# The same call from inside a flow's review step: no briefing, the flow brings its own.
+out="$(cd "$OUTSIDE" && printf '%s' '{"hook_event_name":"SessionStart","source":"startup"}' |
+  DEVIL_FLOW_CHILD=1 CLAUDE_PROJECT_DIR="$HOST" python3 "$FHOOK" 2>/dev/null)"
+if [ -z "$out" ]; then
+  ok "SessionStart stays silent inside a flow's review (DEVIL_FLOW_CHILD=1)"
+else no "a flow child must get no briefing, got: ${out:0:160}"; fi
 
 # --- PreCompact names the handoff that outlives the session --------------------
 # What compaction drops is exactly what a fresh session has to re-derive, so the

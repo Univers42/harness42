@@ -2,14 +2,17 @@
 
 report.json is for code (jq), report.md is for a person or an agent that was blocked, and
 the return block from templates/agent-brief.md ends stdout so a caller can grep it without
-opening either. One line per run also goes to runs/index.jsonl.
+opening either. One line per run also goes to runs/index.jsonl. A review's findings are
+rendered in the column layouts of agents/reviewer.md and agents/security.md.
 """
 
 import json
 import time
 
-VERDICT = {0: "PASS", 1: "FAIL", 124: "TIMEOUT"}
+VERDICT = {0: "PASS", 1: "FAIL", 3: "ERROR", 124: "TIMEOUT"}
 MAX_CHANGED = 20
+MAX_NEXT = 5  # findings named in the return block's `next`; the rest are in report.md
+BLOCKING = ("BLOCKER", "CRITICAL", "HIGH")
 
 
 def read_gates(run_dir):
@@ -25,14 +28,44 @@ def read_gates(run_dir):
     ]
 
 
+def _short(text, limit=100):
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _review_next(bad):
+    if bad["status"] == "ERROR":
+        why = bad["reason"]
+        return f"review gave no verdict ({why}): fall back to the reviewer and security agents ({bad['log']})"
+    findings = bad["review"]["findings"]
+    named = [f for f in findings if f["severity"] in BLOCKING] or findings
+    listed = "; ".join(
+        f"{f['severity']} {f['file']}:{f['line']} {_short(f['finding'])}"
+        for f in named[:MAX_NEXT]
+    )
+    more = f" (+{len(named) - MAX_NEXT} more)" if len(named) > MAX_NEXT else ""
+    return f"review asked for changes: {listed}{more}"
+
+
+def _not_reviewed(results):
+    review = next((r["review"] for r in results if r.get("review")), None)
+    omitted = review["omitted"] if review else []
+    return (
+        f"not reviewed (over max_diff_bytes): {', '.join(omitted)}" if omitted else ""
+    )
+
+
 def _next_step(results, gates):
-    bad = next((r for r in results if r["status"] in ("FAIL", "TIMEOUT")), None)
+    bad = next((r for r in results if r["status"] not in ("PASS", "SKIP")), None)
     if bad is None:
-        return "none", "none: the flow is green"
+        return _not_reviewed(results) or "none", "none: the flow is green"
     skipped = [r["name"] for r in results if r["status"] == "SKIP"]
     deviations = f"stopped at {bad['name']}" + (
         f"; skipped {', '.join(skipped)}" if skipped else ""
     )
+    if bad["type"] == "review":
+        return "; ".join(
+            filter(None, [deviations, _not_reviewed(results)])
+        ), _review_next(bad)
     if bad["status"] == "TIMEOUT":
         return (
             deviations,
@@ -88,6 +121,66 @@ def _table(header, rows):
     return out + [f"| {' | '.join(_cell(c) for c in row)} |" for row in rows]
 
 
+def _where(f):
+    return f"{f['file']}:{f['line']}"
+
+
+# area: (header, cells); the layouts of agents/reviewer.md and agents/security.md, with a
+# severity column on Spec too, because code blocks on it.
+AREA_TABLES = {
+    "standards": (
+        ("Severity", "file:line", "Finding", "Smallest fix"),
+        lambda f: (f["severity"], _where(f), f["finding"], f["fix"]),
+    ),
+    "spec": (
+        ("Severity", "Contract clause", "file:line", "Deviation", "Smallest fix"),
+        lambda f: (
+            f["severity"],
+            f.get("clause", "-"),
+            _where(f),
+            f["finding"],
+            f["fix"],
+        ),
+    ),
+    "security": (
+        ("Severity", "file:line", "Class", "What an attacker gets", "Smallest fix"),
+        lambda f: (
+            f["severity"],
+            _where(f),
+            f.get("class", "-"),
+            f["finding"],
+            f["fix"],
+        ),
+    ),
+}
+
+
+def _review_md(review):
+    usd = review["cost"]["usd"]
+    spent = "unknown" if usd is None else f"${usd:.4f}"
+    lines = [
+        "",
+        "## Review",
+        "",
+        f"- Model: `{review['model']}`; cost {spent} (the CLI's client-side figure, not a bill)",
+    ]
+    if review["status"] == "ERROR":
+        return [
+            *lines,
+            f"- No verdict: {review['reason']}. Fall back to the reviewer and security agents.",
+        ]
+    lines += [
+        f"- Verdict: **{review['verdict']}**",
+        f"- Summary: {_cell(review['summary'])}",
+        f"- Checked and clean: {_cell(review['checked'])}",
+    ]
+    for area, (header, cells) in AREA_TABLES.items():
+        rows = [cells(f) for f in review["findings"] if f["area"] == area]
+        lines += ["", f"**{area.title()}** ({len(rows)})", ""]
+        lines += _table(header, rows) if rows else ["None."]
+    return lines
+
+
 def markdown(report, run_dir):
     def rel(path):
         return path.replace(f"{run_dir}/", "") if path else "-"
@@ -129,8 +222,21 @@ def markdown(report, run_dir):
             "",
             *_table(("Result", "Gate", "Category", "Log"), gate_rows),
         ]
+    if report["review"]:
+        lines += _review_md(report["review"])
     lines += ["", "## Return block", "", "```text", return_block(report), "```", ""]
     return "\n".join(lines)
+
+
+def _review_of(results):
+    """The review step's outcome for report.json, or None when it never ran."""
+    ran = [r for r in results if r["type"] == "review" and r["status"] != "SKIP"]
+    if not ran:
+        return None
+    r = ran[0]
+    cost = {"usd": r["cost_usd"], "source": "client"}
+    head = {"status": r["status"], "model": r["model"], "reason": r["reason"]}
+    return {**head, "cost": cost, **(r["review"] or {})}
 
 
 def write(run_dir, flow, meta, results, code):
@@ -148,6 +254,7 @@ def write(run_dir, flow, meta, results, code):
                 "seconds",
                 "log",
                 "message",
+                "reason",
             )
         }
         for r in results
@@ -161,6 +268,7 @@ def write(run_dir, flow, meta, results, code):
         "meta": meta,
         "steps": steps,
         "gates": gates,
+        "review": _review_of(results),
         "report_md": str(run_dir / "report.md"),
         "brief": brief(run_dir, results, gates, code),
     }
