@@ -9,6 +9,7 @@ line per job, and never merge on an agent's say-so.
 | `oc-job.sh <label> <worktree> <agent> <body> [rows]` | prompt = `$OC_COMMON_PROMPT` + body; runs `oc-run.sh`; commits and pushes the branch only if the job exited 0, its return block says `status: done`, and the optional rows gate is green. Exit 0 ok · 1 gate red · 2 agent not done · 3 worktree already busy |
 | `oc-status.sh [root]` | one line per job under `<root>/*/target/wf`: state (`RUNNING`, `done(rc=N)`, `DEAD`, `STALLED`), minutes since the last event, session id, last ~200 chars the model wrote |
 | `gate.sh <logdir> <rows>` | rows `name\|expect\|cmd` (expect `0` or `nonzero`); one log per row and `<logdir>/summary.txt`; a row that could not run keeps its real exit code, never a pass |
+| `diff.sh [--base REF] <outdir>` | the change under review: merge-base(REF, HEAD) to the working tree plus untracked files, into `diff.patch`, `changed.txt`, `base.txt`; never `.claude/cache/`. Exit 0 (also when empty) · 2 bad ref/usage |
 | `timed <cmd...>` | run a long gate under a host-wide `flock`, one at a time |
 
 ## The loop
