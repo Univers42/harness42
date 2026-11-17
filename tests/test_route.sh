@@ -22,7 +22,7 @@ no() {
 check() { if eval "$2"; then ok "$1"; else no "$1"; fi; }
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+trap 'kill ${SRV:-} 2>/dev/null; rm -rf "$TMP"' EXIT
 SECRET="sk-ant-planted-$$-never-print"
 mkdir -p "$TMP/bin" "$TMP/home"
 export HOME="$TMP/home" XDG_CONFIG_HOME="$TMP/home/.config" XDG_STATE_HOME="$TMP/state"
@@ -155,6 +155,46 @@ echo '{"ts":"t","route_id":"switchyard","tier":"capable","model":"claude-opus-5-
 row="$(cd "$HOST" && bash "$ROUTE" log | tail -1)"
 want=$'t\tswitchyard\tcapable\tclaude-opus-5-5\tfalse\t-\t9\t0.25'
 if [ "$row" = "$want" ]; then ok "log prints one TSV row per call"; else no "log prints one TSV row per call: $row"; fi
+
+# --- the SessionStart guard -------------------------------------------------------
+# hooks.py route-guard probes the real loopback port (no curl), so the port is a free one.
+guard() {
+  printf '%s' '{"hook_event_name":"SessionStart","source":"startup"}' |
+    CLAUDE_PROJECT_DIR="$HOST" python3 "$ROOT/hooks/scripts/hooks.py" route-guard 2>&1 |
+    tee -a "$TMP/out"
+}
+listening() { python3 -c 'import socket, sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), 1)' "$1" 2>/dev/null; }
+P="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+cp "$TMP/orig.json" "$SETTINGS"
+if [ -z "$(guard)" ]; then ok "the guard is silent in a project that is not routed"; else no "the guard spoke in an unrouted project"; fi
+DEVIL_SWITCHYARD_PORT="$P" run on
+out="$(guard)"
+case "$out" in
+*'"systemMessage"'*"turned model routing off"*) ok "the guard turns routing off when the proxy is down" ;;
+*) no "the guard on a dead port said: ${out:0:160}" ;;
+esac
+check "the guard restores the settings exactly" "[ \"\$(jq -S . '$SETTINGS')\" = \"\$(jq -S . '$TMP/orig.json')\" ]"
+DEVIL_SWITCHYARD_PORT="$P" run on
+# An exported kit (codex, copilot) ships hooks/ without tools/: it must stay silent.
+mkdir -p "$TMP/kit" && cp -r "$ROOT/hooks" "$TMP/kit/"
+out="$(printf '%s' '{"hook_event_name":"SessionStart","source":"startup"}' |
+  CLAUDE_PROJECT_DIR="$HOST" python3 "$TMP/kit/hooks/scripts/hooks.py" route-guard 2>&1)"
+if [ -z "$out" ] && jq -e ._devilRoute "$SETTINGS" >/dev/null; then
+  ok "a kit without tools/ leaves the route alone and says nothing"
+else
+  no "a kit without tools/ said: ${out:0:160}"
+fi
+mkdir -p "$TMP/www" && touch "$TMP/www/health"
+python3 -m http.server --bind 127.0.0.1 --directory "$TMP/www" "$P" >/dev/null 2>&1 &
+SRV=$!
+for _ in $(seq 50); do listening "$P" && break || sleep 0.1; done
+if [ -z "$(guard)" ] && jq -e ._devilRoute "$SETTINGS" >/dev/null; then
+  ok "the guard leaves a healthy route alone"
+else
+  no "the guard touched a healthy route"
+fi
+kill "$SRV" && wait "$SRV" 2>/dev/null
+run off
 
 # --- secrets ----------------------------------------------------------------------
 check "the API key never reaches any output or docker argv" "! grep -qF '$SECRET' '$TMP/out' '$TMP/docker.log'"

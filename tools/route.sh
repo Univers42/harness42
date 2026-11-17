@@ -14,7 +14,8 @@
 # call forwards the caller's own Claude login (forward_auth), so no key is stored anywhere.
 # Exit: 0 done, 1 refused or the proxy is down, 2 usage, a bad setting or an invalid file.
 # Caveat: `on` applies from the next claude start, and a proxy that dies mid-session breaks
-# that session until it restarts. The log rotates at start only (one 50 MB generation kept).
+# that session; the next start finds it down and turns routing off (hooks.py route-guard).
+# The log rotates at start only (one 50 MB generation kept).
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh

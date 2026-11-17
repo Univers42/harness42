@@ -114,6 +114,13 @@
             "timeout": 10,
             "async": true,
             "statusMessage": "Briefing"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${PLUGIN_ROOT}/hooks/scripts/hooks.py route-guard",
+            "timeout": 10,
+            "async": false,
+            "statusMessage": "Model routing"
           }
         ]
       }

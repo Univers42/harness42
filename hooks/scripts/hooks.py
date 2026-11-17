@@ -11,7 +11,8 @@ Two jobs, in this order:
   ENFORCEMENT (synchronous — the decision is only honoured if we block)
     PreToolUse   refuse the catastrophic, ask on the irreversible (rules/risk.md)
     PostToolUse  run the matching fast gate on the file just edited
-    SessionStart hand the agent its briefing instead of making it re-derive one
+    SessionStart hand the agent its briefing instead of making it re-derive one;
+                 `hooks.py route-guard` turns model routing off if its proxy is down
     PreCompact   flush session facts so compaction does not lose them
 
   NOTIFICATION (asynchronous — best effort, never blocks)
@@ -53,7 +54,7 @@ try:
     from kit import disabled, load_config
     from notify import play_sound
     from risk import pre_tool_use
-    from session import pre_compact, session_start
+    from session import pre_compact, route_guard, session_start
 except Exception:
     sys.exit(0)  # fail open: a broken module must not stop the user either
 
@@ -77,6 +78,13 @@ def main():
 
         config = load_config()
         if disabled(config, event):
+            sys.exit(0)
+
+        # The second, synchronous SessionStart handler: only the routing check, so
+        # the briefing stays in the background and nothing else runs twice.
+        if sys.argv[1:] == ["route-guard"]:
+            if event == "SessionStart":
+                route_guard(data)
             sys.exit(0)
 
         if config.get("sounds", False):
