@@ -6,7 +6,7 @@
 #        devil route start                 validate the routes, then run the proxy on 127.0.0.1
 #        devil route stop [--force]        remove the proxy (refused while a project is routed)
 #        devil route status                container, health, config and routed projects
-#        devil route on | off              route this project (.claude/settings.local.json)
+#        devil route on [--judged] | off   route this project (.claude/settings.local.json)
 #        devil route log [--session ID]    the last 100 routed calls, or one session's cost
 #
 # The routes live in ${XDG_STATE_HOME:-~/.local/state}/devil/switchyard/routes.toml, seeded
@@ -15,7 +15,9 @@
 # Exit: 0 done, 1 refused or the proxy is down, 2 usage, a bad setting or an invalid file.
 # Caveat: `on` applies from the next claude start, and a proxy that dies mid-session breaks
 # that session; the next start finds it down and turns routing off (hooks.py route-guard).
-# The log rotates at start only (one 50 MB generation kept).
+# The log rotates at start only (one 50 MB generation kept). Switchyard forwards only the
+# oauth-* betas, so `on` turns Claude Code's others off: a request needing one fails (HTTP
+# 400). --judged needs an API key: a subscription login is refused the judge's calls (429).
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
@@ -36,10 +38,9 @@ die() {
   exit "$1"
 }
 
+# usage CODE: the usage lines of this header, on stdout for 0 and stderr otherwise.
 usage() {
-  local fd=1
-  [ "$1" -eq 0 ] || fd=2
-  sed -n '5,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&"$fd"
+  sed -n '5,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&$((${1} ? 2 : 1))
   exit "$1"
 }
 
@@ -77,13 +78,7 @@ seed_routes() {
   fi
 }
 
-wait_healthy() {
-  for _ in $(seq 40); do
-    healthy && return 0
-    sleep 0.5
-  done
-  return 1
-}
+wait_healthy() { for _ in $(seq 40); do healthy && return 0 || sleep 0.5; done && return 1; }
 
 cmd_start() {
   local want running
@@ -145,7 +140,7 @@ cmd_status() {
       state="absent"
   fi
   echo "container: $state"
-  if healthy; then echo "health:    ok at $URL"; else
+  if healthy; then echo "health:    ok at $URL; routes: $(route_ids | paste -sd' ' -)"; else
     echo "health:    down at $URL"
     rc=1
   fi
@@ -158,11 +153,20 @@ cmd_status() {
 
 # --- one project's settings ---------------------------------------------------
 
+# Claude Code keeps its own model IDs (the template's targets), so it knows each model's
+# features and prices; modelOverrides puts a route's id on the wire in their place. $1 is the
+# main loop's route; whatever asks for Opus or Haiku by name gets that model, unrouted.
 set_values() {
-  jq -n --arg url "$URL" '{ANTHROPIC_BASE_URL: $url, ANTHROPIC_MODEL: "switchyard",
-    ANTHROPIC_DEFAULT_OPUS_MODEL: "switchyard", ANTHROPIC_DEFAULT_SONNET_MODEL: "switchyard",
-    ANTHROPIC_DEFAULT_HAIKU_MODEL: "devil-fast"}'
+  jq -n --arg url "$URL" --arg main "$1" '{
+    env: {ANTHROPIC_BASE_URL: $url, CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
+      ANTHROPIC_MODEL: "claude-sonnet-5-5", ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5-5",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-5-5"},
+    modelOverrides: {"claude-opus-5-5": "devil-review", "claude-sonnet-5-5": $main,
+      "claude-haiku-5-5": "devil-fast"}}'
 }
+
+route_ids() { curl -fsS --max-time 2 "$URL/v1/models" | jq -r '.data[].id' 2>/dev/null; }
 
 # write_json FILE JSON: a temp file beside FILE, then a rename, so a crash leaves old or new.
 write_json() {
@@ -197,7 +201,8 @@ register() {
 }
 
 cmd_on() {
-  local f root cur new created=false
+  local f root cur new main=switchyard created=false
+  case "${1:-}" in "") ;; --judged) main=switchyard-judged ;; *) usage 2 ;; esac
   f="$(settings_file)" || exit $?
   root="$(dirname "$(dirname "$f")")"
   if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
@@ -205,6 +210,8 @@ cmd_on() {
     die 1 "$f is not git-ignored; ignore it first, so the proxy settings stay on this machine"
   fi
   healthy || die 1 "the proxy at $URL is down; run: devil route start"
+  [ "$(route_ids | grep -cxF -e "$main" -e devil-review -e devil-fast)" -eq 3 ] ||
+    die 1 "the proxy lacks a route of: $main devil-review devil-fast; see $CONF"
   if [ -f "$f" ] && jq -e 'has("_devilRoute")' "$f" >/dev/null; then
     echo "route: already on in $root"
     return 0
@@ -212,14 +219,17 @@ cmd_on() {
   [ -f "$f" ] || created=true
   mkdir -p "$root/.claude" || die 1 "cannot create $root/.claude"
   cur="$(cat "$f" 2>/dev/null || echo '{}')"
-  new="$(jq --argjson set "$(set_values)" --argjson created "$created" '
-    (.env // {}) as $env
-    | ._devilRoute = {set: $set, created: $created, env_existed: has("env"),
-        previous: ($env | with_entries(select(.key as $k | $set | has($k))))}
-    | .env = ($env + $set)' <<<"$cur")" || die 2 "$f: env is not an object"
+  # Per section (env, modelOverrides): what on set, what it replaced, whether it existed.
+  new="$(jq --argjson v "$(set_values "$main")" --argjson created "$created" '
+    def take($k): (.[$k] // {}) as $cur
+      | ._devilRoute[$k] = {set: $v[$k], existed: has($k),
+          previous: ($cur | with_entries(select(.key as $n | $v[$k] | has($n))))}
+      | .[$k] = ($cur + $v[$k]);
+    ._devilRoute = {created: $created} | take("env") | take("modelOverrides")' <<<"$cur")" ||
+    die 2 "$f: env or modelOverrides is not an object"
   write_json "$f" "$new"
   register "$root" add
-  echo "route: on for $root; restart claude to route through $URL"
+  echo "route: on for $root (main loop: $main); restart claude to route through $URL"
 }
 
 cmd_off() {
@@ -231,15 +241,18 @@ cmd_off() {
     echo "route: already off in $root"
     return 0
   fi
-  edited="$(jq -r '(.env // {}) as $env | ._devilRoute.set | to_entries[]
-    | select(.value != $env[.key]) | .key' "$f")" || die 2 "$f: unreadable _devilRoute record"
+  edited="$(jq -r '. as $d | ("env", "modelOverrides") as $k | ($d._devilRoute[$k].set // {})
+    | to_entries[] | select(.value != ($d[$k] // {})[.key]) | "\($k).\(.key)"' "$f")" ||
+    die 2 "$f: unreadable _devilRoute record"
   if [ -n "$edited" ]; then
     die 1 "$f: changed since 'on': $(echo "$edited" | paste -sd, -); restore or drop _devilRoute by hand"
   fi
-  new="$(jq '._devilRoute as $r
-    | .env = ((.env // {}) | with_entries(select(.key as $k | $r.set | has($k) | not)) + $r.previous)
-    | if ($r.env_existed | not) and .env == {} then del(.env) else . end
-    | del(._devilRoute)' "$f")" || die 2 "$f: unreadable _devilRoute record"
+  new="$(jq 'def give($k): ._devilRoute[$k] as $r
+      | .[$k] = ((.[$k] // {}) | with_entries(select(.key as $n | $r.set | has($n) | not))
+          + $r.previous)
+      | if ($r.existed | not) and .[$k] == {} then del(.[$k]) else . end;
+    give("env") | give("modelOverrides") | del(._devilRoute)' "$f")" ||
+    die 2 "$f: unreadable _devilRoute record"
   if jq -e '._devilRoute.created == true' "$f" >/dev/null && [ "$new" = "{}" ]; then
     rm -f "$f" || die 1 "could not remove $f"
   else
@@ -266,8 +279,10 @@ cmd_log() {
   fi
   [ -s "$LOG" ] || die 1 "no routed calls yet ($LOG)"
   printf 'ts\troute\ttier\tmodel\tdelegated\trole\ttokens\tcost_usd\n'
-  tail -n 100 "$LOG" | jq -r '[.ts, .route_id, .tier, .model, .delegated, .agent_role,
-    .total_tokens, .cost.usd?] | map(if . == null then "-" else tostring end) | @tsv'
+  # Calls only: the log also holds a record per session outcome, with no route.
+  tail -n 100 "$LOG" | jq -r 'select(has("route_id")) | [.ts, .route_id, .tier, .model,
+    .delegated, .agent_role, .total_tokens, .cost.usd?]
+    | map(if . == null or . == "" then "-" else tostring end) | @tsv'
 }
 
 case "${1:-}" in
@@ -275,12 +290,9 @@ build) cmd_build ;;
 start) cmd_start ;;
 stop) cmd_stop "${2:-}" ;;
 status) cmd_status ;;
-on) cmd_on ;;
+on) cmd_on "${2:-}" ;;
 off) cmd_off ;;
-log)
-  shift
-  cmd_log "$@"
-  ;;
+log) cmd_log "${2:-}" "${3:-}" ;;
 -h | --help) usage 0 ;;
 *) usage 2 ;;
 esac

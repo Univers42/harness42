@@ -23,25 +23,40 @@ llm_client = "anthropic"
 id = "claude-haiku-5-5"
 llm_client = "anthropic"
 
-# The main loop: Haiku judges each user turn, then the stage router moves between Sonnet and
-# Opus as tool results come in. A judge that fails routes to Opus (fail_open, the default).
+# The main loop (`devil route on`): each turn starts on Sonnet, and the stage router moves it
+# to Opus while the recent tool results show the work going wrong (failing commands, repeated
+# errors), then back. It reads the request only and makes no model call of its own, so it
+# works on any login.
 [routes.switchyard]
 id = "switchyard"
+type = "stage_router"
+capable_target = "capable"
+efficient_target = "efficient"
+picker = "efficient_first"
+confidence_threshold = 0.5
+
+# The judged main loop (`devil route on --judged`), for an API-key login: Haiku judges each
+# user turn, the stage router runs the turns inside it, and each sub-agent is judged once.
+# Caveat: Switchyard's own judge calls are not Claude Code's, and a subscription login is
+# refused them (HTTP 429): every turn then lands on Sonnet (the efficient-first profile; a
+# session keeps its last judged tier), slower by the failed call.
+[routes.switchyard_judged]
+id = "switchyard-judged"
 type = "composite"
 
-[routes.switchyard.classifier]
+[routes.switchyard_judged.classifier]
 target = "fast"
 base_threshold = 0.5
 classify_trigger = "user_turn"
 
-[routes.switchyard.stage]
+[routes.switchyard_judged.stage]
 capable_target = "capable"
 efficient_target = "efficient"
 confidence_threshold = 0.5
 
 # Sub-agents: judged once per agent. Review, security and design work goes to Opus, the rest to
-# Sonnet; a failed judgement goes to Opus.
-[routes.switchyard.subagents]
+# Sonnet; a failed judgement goes to Opus (default_target).
+[routes.switchyard_judged.subagents]
 type = "llm_classifier"
 mode = "custom"
 models = { judge = ["fast"], capable = ["capable"], efficient = ["efficient"], any = ["capable", "efficient"] }
@@ -71,7 +86,8 @@ response_schema = '''
 '''
 policy = { type = "target_selector", selector = "/target" }
 
-# Fixed routes a caller names directly: a flow's review, and Claude Code's background calls.
+# Fixed routes. `devil route on` maps Claude Code's Opus to devil-review (a flow's review, an
+# agent with model: opus, /model opus) and its Haiku to devil-fast (background calls).
 [routes.devil_review]
 id = "devil-review"
 type = "passthrough"

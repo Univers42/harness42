@@ -45,12 +45,17 @@ case "$1 $2" in
   esac ;;
 esac
 SH
-# curl: /health answers while $FAKE/healthy exists; session-stats answers for "s1" only.
+# curl: /health answers while $FAKE/healthy exists; session-stats answers for "s1" only;
+# /v1/models lists the template's routes, less switchyard-judged if $FAKE/nojudged.
 cat >"$TMP/bin/curl" <<'SH'
 #!/usr/bin/env bash
 url="${*: -1}"
 case "$url" in
 */health) [ -f "$FAKE/healthy" ] ;;
+*/v1/models)
+  judged='{"id":"switchyard-judged"},'
+  [ ! -f "$FAKE/nojudged" ] || judged=""
+  echo "{\"data\":[{\"id\":\"devil-fast\"},{\"id\":\"devil-review\"},$judged{\"id\":\"switchyard\"}]}" ;;
 *session_id=s1) echo '{"session_id":"s1","cost":{"total_usd":0.5}}' ;;
 *) exit 22 ;;
 esac
@@ -68,6 +73,10 @@ assert list(c) == [\"anthropic\"], c
 assert c[\"anthropic\"][\"base_url\"] == \"https://api.anthropic.com\"
 assert c[\"anthropic\"][\"forward_auth\"] is True' '$TPL'"
 check "template holds no key and names no key variable" "! grep -qE 'api_key|sk-' '$TPL'"
+check "the default main route makes no model call of its own (no judge)" "python3 -I -c '
+import sys, tomllib
+r = tomllib.load(open(sys.argv[1], \"rb\"))[\"routes\"][\"switchyard\"]
+assert r[\"type\"] == \"stage_router\" and not {\"classifier\", \"subagents\"} & r.keys(), r' '$TPL'"
 
 # --- usage and settings ---------------------------------------------------------
 run
@@ -104,7 +113,8 @@ done
 HOST="$TMP/host"
 SETTINGS="$HOST/.claude/settings.local.json"
 mkdir -p "$HOST/.claude" && git -C "$HOST" init -q
-printf '{"permissions":{"allow":["Bash(ls)"]},"env":{"FOO":"1","ANTHROPIC_MODEL":"opus"}}\n' >"$SETTINGS"
+printf '%s\n' '{"permissions":{"allow":["Bash(ls)"]},"env":{"FOO":"1","ANTHROPIC_MODEL":"opus"},
+  "modelOverrides":{"claude-opus-5-5":"my-opus","claude-fable-5-2":"my-fable"}}' >"$SETTINGS"
 cp "$SETTINGS" "$TMP/orig.json"
 run on
 check "on refuses a settings file git would commit (exit 1)" "[ $? -eq 1 ]"
@@ -118,7 +128,14 @@ touch "$TMP/healthy"
 run on
 check "on is exit 0" "[ $? -eq 0 ]"
 check "on points the project at the loopback proxy" "[ \"\$(jq -r .env.ANTHROPIC_BASE_URL '$SETTINGS')\" = http://127.0.0.1:4123 ]"
-check "on keeps unrelated keys" "[ \"\$(jq -r .env.FOO '$SETTINGS')\" = 1 ]"
+check "on keeps unrelated keys" "[ \"\$(jq -r '.env.FOO + .modelOverrides[\"claude-fable-5-2\"]' '$SETTINGS')\" = 1my-fable ]"
+check "on turns off the betas Switchyard drops" "jq -e '.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS == \"1\"' '$SETTINGS' >/dev/null"
+check "on maps Claude Code's model IDs to the routes" "jq -e '.env.ANTHROPIC_MODEL == \"claude-sonnet-5-5\" and .modelOverrides == {\"claude-opus-5-5\": \"devil-review\", \"claude-sonnet-5-5\": \"switchyard\", \"claude-haiku-5-5\": \"devil-fast\", \"claude-fable-5-2\": \"my-fable\"}' '$SETTINGS' >/dev/null"
+check "the IDs on maps are the template's targets" "python3 -I -c '
+import json, sys, tomllib
+t = {v[\"id\"] for v in tomllib.load(open(sys.argv[1], \"rb\"))[\"targets\"].values()}
+m = json.load(open(sys.argv[2]))[\"_devilRoute\"][\"modelOverrides\"][\"set\"]
+assert set(m) == t, (m, t)' '$TPL' '$SETTINGS'"
 run stop
 check "stop is refused while a project is routed (exit 1)" "[ $? -eq 1 ]"
 check "the refusal names the project" "grep -q 'still on in $HOST' '$TMP/out'"
@@ -132,6 +149,22 @@ jq '.env.ANTHROPIC_MODEL = "mine"' "$SETTINGS" >"$TMP/edited.json" && cp "$TMP/e
 run off
 check "off refuses a key the user changed since on (exit 1)" "[ $? -eq 1 ]"
 check "a refused off keeps the user's edit" "cmp -s '$SETTINGS' '$TMP/edited.json'"
+jq '.env.ANTHROPIC_MODEL = "claude-sonnet-5-5" | .modelOverrides["claude-haiku-5-5"] = "x"' \
+  "$TMP/edited.json" >"$SETTINGS"
+run off
+check "off refuses an override the user changed since on (exit 1)" "[ $? -eq 1 ] && grep -q 'modelOverrides.claude-haiku-5-5' '$TMP/out'"
+cp "$TMP/orig.json" "$SETTINGS"
+run on --judged
+check "on --judged sends the main loop to switchyard-judged" "jq -e '.modelOverrides[\"claude-sonnet-5-5\"] == \"switchyard-judged\"' '$SETTINGS' >/dev/null"
+run off
+check "on --judged then off restores the file exactly" "[ \"\$(jq -S . '$SETTINGS')\" = \"\$(jq -S . '$TMP/orig.json')\" ]"
+touch "$TMP/nojudged"
+cp "$SETTINGS" "$TMP/before.json"
+run on --judged
+check "on refuses a route the proxy lacks (exit 1), file unchanged" "[ $? -eq 1 ] && cmp -s '$SETTINGS' '$TMP/before.json'"
+rm -f "$TMP/nojudged"
+run on --bogus
+check "on with an unknown flag is exit 2" "[ $? -eq 2 ]"
 rm -f "$SETTINGS"
 run on
 check "on creates a missing settings file" "jq -e ._devilRoute.created '$SETTINGS' >/dev/null"
@@ -142,7 +175,12 @@ check "stop runs once no project is routed" "[ $? -eq 0 ]"
 echo '{not json' >"$SETTINGS"
 run on
 check "on with invalid JSON is exit 2" "[ $? -eq 2 ]"
+echo '{"modelOverrides":"x"}' >"$SETTINGS"
+run on
+check "on with a modelOverrides that is not an object is exit 2" "[ $? -eq 2 ] && [ \"\$(cat '$SETTINGS')\" = '{\"modelOverrides\":\"x\"}' ]"
 rm -f "$SETTINGS"
+run status
+check "status lists the proxy's routes" "grep -q 'routes: devil-fast devil-review switchyard-judged switchyard' '$TMP/out'"
 
 # --- log ------------------------------------------------------------------------
 run log --session 'bad id'
@@ -150,11 +188,13 @@ check "log rejects a malformed session id (exit 2)" "[ $? -eq 2 ]"
 run log --session s1
 check "log --session prints the proxy's stats" "grep -q '\"total_usd\": 0.5' '$TMP/out'"
 mkdir -p "$TMP/state/devil/switchyard/log"
-echo '{"ts":"t","route_id":"switchyard","tier":"capable","model":"claude-opus-5-5","delegated":false,"total_tokens":9,"cost":{"usd":0.25,"source":"estimated"}}' \
-  >"$TMP/state/devil/switchyard/log/routing.jsonl"
-row="$(cd "$HOST" && bash "$ROUTE" log | tail -1)"
+{
+  echo '{"ts":"t","route_id":"switchyard","tier":"capable","model":"claude-opus-5-5","delegated":false,"total_tokens":9,"cost":{"usd":0.25,"source":"estimated"}}'
+  echo '{"session_id":"s1","outcome":{"resolved":true}}'
+} >"$TMP/state/devil/switchyard/log/routing.jsonl"
+rows="$(cd "$HOST" && bash "$ROUTE" log | tail -n +2)"
 want=$'t\tswitchyard\tcapable\tclaude-opus-5-5\tfalse\t-\t9\t0.25'
-if [ "$row" = "$want" ]; then ok "log prints one TSV row per call"; else no "log prints one TSV row per call: $row"; fi
+if [ "$rows" = "$want" ]; then ok "log prints one TSV row per call, and no outcome rows"; else no "log rows: $rows"; fi
 
 # --- the SessionStart guard -------------------------------------------------------
 # hooks.py route-guard probes the real loopback port (no curl), so the port is a free one.

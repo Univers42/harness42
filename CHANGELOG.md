@@ -43,7 +43,14 @@ agree, and `bash tools/release.sh bump <major|minor|patch>` cuts the next one.
   127.0.0.1. `on` routes one project through `.claude/settings.local.json` (refused
   unless the file is git-ignored and the proxy answers), and `off` restores the
   previous values. No key is stored: the caller's login is forwarded. The routes are
-  seeded from `templates/switchyard/routes.toml`.
+  seeded from `templates/switchyard/routes.toml`. Claude Code keeps its own model IDs
+  (`modelOverrides` puts the route on the wire), so it prices and configures each model
+  as it would unrouted. It sends no experimental betas either, because Switchyard
+  forwards only the `oauth-*` ones and a request that needs another fails upstream.
+  The main loop's default route is a judge-free stage router: Sonnet, escalating to Opus
+  on tool-result signals, with no model call of its own. `on --judged` selects the
+  Haiku-judged composite route, for an API-key login only: a subscription login is
+  refused Switchyard's own judge calls (HTTP 429), and every turn then lands on Sonnet.
 - A synchronous SessionStart hook (`hooks.py route-guard`) turns routing off when the
   project is routed and the proxy is down, and asks for a restart: the session it runs
   in still points at the dead proxy, and the next one does not.
