@@ -118,14 +118,8 @@ target also needs its own row in `README.md` under "Other harnesses" and its own
 section in `doc/HARNESSES.md`; a claim nobody measured is UNVERIFIED, never a row in "what
 works". `opencode` and `gemini` are the worked examples, and their install contracts and
 measured limits are in `dist/<harness>/README.md`.
-Add a harness? Put its emitters in `lib/export-<harness>.sh` and one `case` arm in
-`export.sh`. The Claude-format files stay canonical: the generator is the only place that
-knows another dialect, and `--check` is what keeps the two from drifting. `opencode` is the
-worked example; its install contract and its measured limits are in
-`dist/opencode/README.md`.
 
-Then add a `check config export_<harness>` row in `quality.sh` and a
-`tools/export.sh --check <harness>` step in CI. A target that is generated but not gated
+Then add a `tools/export.sh --check <harness>` step in CI. A target that is generated but not gated
 drifts silently, which is the whole failure mode the generator exists to prevent.
 
 `copilot` is the second target, and it is the counter-example worth reading: it needed
