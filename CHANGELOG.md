@@ -11,6 +11,19 @@ agree, and `bash tools/release.sh bump <major|minor|patch>` cuts the next one.
 
 ## [Unreleased]
 
+### Changed
+
+- The SessionStart route guard runs `devil route off --keep-edited`: when the proxy is
+  down and you changed a routed key since `on`, routing still goes off, your change
+  stays, and the message names it. Before, that refusal left the project pointing at
+  the dead proxy.
+
+### Added
+
+- `devil route off --keep-edited` restores every key `on` set that you have not
+  changed since, and keeps the ones you have; plain `off` still refuses.
+- `devil route status` counts the logged calls per route since the last log rotation.
+
 ## [1.2.0] - 2026-11-17
 
 ### Changed

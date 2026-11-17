@@ -54,6 +54,7 @@ devil flow run gate --base main      # run one: 0 green, 1 failed, 2 invalid, 12
 devil flow show                      # the newest run's report
 devil route start                    # Switchyard on 127.0.0.1:4123 (after: devil route build)
 devil route on                       # route this project; `off` restores its settings
+devil route status                   # proxy health, routes, calls per route, routed projects
 
 devil selfcheck                      # this config's own integrity (exit 1 = drift)
 devil setup --check                  # is this host fully seeded? (exit 1 = a stage differs)

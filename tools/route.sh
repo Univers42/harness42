@@ -5,8 +5,9 @@
 # Usage: devil route build                 build the pinned image (network; slow the first time)
 #        devil route start                 validate the routes, then run the proxy on 127.0.0.1
 #        devil route stop [--force]        remove the proxy (refused while a project is routed)
-#        devil route status                container, health, config and routed projects
-#        devil route on [--judged] | off   route this project (.claude/settings.local.json)
+#        devil route status                container, health, calls per route, routed projects
+#        devil route on [--judged]         route this project (.claude/settings.local.json)
+#        devil route off [--keep-edited]   restore it; --keep-edited keeps keys changed since on
 #        devil route log [--session ID]    the last 100 routed calls, or one session's cost
 #
 # The routes live in ${XDG_STATE_HOME:-~/.local/state}/devil/switchyard/routes.toml, seeded
@@ -40,13 +41,11 @@ die() {
 
 # usage CODE: the usage lines of this header, on stdout for 0 and stderr otherwise.
 usage() {
-  sed -n '5,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&$((${1} ? 2 : 1))
+  sed -n '5,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&$((${1} ? 2 : 1))
   exit "$1"
 }
 
-if ! [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
-  die 2 "DEVIL_SWITCHYARD_REF must be a full 40-character commit sha"
-fi
+[[ "$REF" =~ ^[0-9a-f]{40}$ ]] || die 2 "DEVIL_SWITCHYARD_REF must be a full 40-character commit sha"
 if ! [[ "$PORT" =~ ^[0-9]{4,5}$ ]] || [ "$PORT" -lt 1024 ] || [ "$PORT" -gt 65535 ]; then
   die 2 "DEVIL_SWITCHYARD_PORT must be a port from 1024 to 65535"
 fi
@@ -146,6 +145,8 @@ cmd_status() {
   fi
   echo "routes:    $CONF"
   echo "log:       $LOG"
+  [ ! -s "$LOG" ] || echo "calls:     $(jq -r 'select(has("route_id")) | .route_id' "$LOG" |
+    sort | uniq -c | awk '{printf "%s%s %s", (NR > 1 ? ", " : ""), $1, $2}') (since the last rotation)"
   echo "routed:"
   routed_projects | sed 's/^/  /'
   return "$rc"
@@ -190,14 +191,12 @@ settings_file() {
   echo "$f"
 }
 
+# register ROOT [add]: drop ROOT from the registry of routed projects, then add it back if asked.
 register() {
-  local tmp="$STATE/projects.$$"
   mkdir -p "$STATE" || die 1 "cannot create $STATE"
-  {
-    grep -vxF "$1" "$STATE/projects" 2>/dev/null
-    [ -z "${2:-}" ] || echo "$1"
-  } >"$tmp"
-  mv -f "$tmp" "$STATE/projects"
+  { grep -vxF "$1" "$STATE/projects" 2>/dev/null || :; } >"$STATE/projects.$$"
+  [ -z "${2:-}" ] || echo "$1" >>"$STATE/projects.$$"
+  mv -f "$STATE/projects.$$" "$STATE/projects"
 }
 
 cmd_on() {
@@ -232,8 +231,10 @@ cmd_on() {
   echo "route: on for $root (main loop: $main); restart claude to route through $URL"
 }
 
+# A key changed since `on` refuses the restore, or with --keep-edited (the guard's) stays as is.
 cmd_off() {
   local f root edited new
+  case "${1:-}" in "" | --keep-edited) ;; *) usage 2 ;; esac
   f="$(settings_file)" || exit $?
   root="$(dirname "$(dirname "$f")")"
   if ! [ -f "$f" ] || ! jq -e 'has("_devilRoute")' "$f" >/dev/null; then
@@ -244,12 +245,15 @@ cmd_off() {
   edited="$(jq -r '. as $d | ("env", "modelOverrides") as $k | ($d._devilRoute[$k].set // {})
     | to_entries[] | select(.value != ($d[$k] // {})[.key]) | "\($k).\(.key)"' "$f")" ||
     die 2 "$f: unreadable _devilRoute record"
-  if [ -n "$edited" ]; then
-    die 1 "$f: changed since 'on': $(echo "$edited" | paste -sd, -); restore or drop _devilRoute by hand"
+  edited="$(echo "$edited" | paste -sd, -)"
+  if [ -n "$edited" ] && [ "${1:-}" != --keep-edited ]; then
+    die 1 "$f: changed since 'on': $edited; restore or drop _devilRoute by hand, or: off --keep-edited"
   fi
-  new="$(jq 'def give($k): ._devilRoute[$k] as $r
-      | .[$k] = ((.[$k] // {}) | with_entries(select(.key as $n | $r.set | has($n) | not))
-          + $r.previous)
+  # $ours: the keys still at on's value; only those are removed, or restored to what they were.
+  new="$(jq 'def give($k): ._devilRoute[$k] as $r | (.[$k] // {}) as $cur
+      | [$r.set | to_entries[] | select(.value == $cur[.key]) | .key] as $ours
+      | .[$k] = ($cur | with_entries(select(.key | IN($ours[]) | not)))
+          + ($r.previous | with_entries(select(.key | IN($ours[]))))
       | if ($r.existed | not) and .[$k] == {} then del(.[$k]) else . end;
     give("env") | give("modelOverrides") | del(._devilRoute)' "$f")" ||
     die 2 "$f: unreadable _devilRoute record"
@@ -260,15 +264,12 @@ cmd_off() {
   fi
   register "$root"
   echo "route: off for $root; restart claude to talk to Anthropic directly"
+  [ -z "$edited" ] || echo "route: kept as you changed them: $edited"
 }
 
 cmd_log() {
   local sid=""
-  case "${1:-}" in
-  "") ;;
-  --session) sid="${2:-}" ;;
-  *) usage 2 ;;
-  esac
+  case "${1:-}" in "") ;; --session) sid="${2:-}" ;; *) usage 2 ;; esac
   have jq || die 2 "needs jq"
   if [ "${1:-}" = --session ]; then
     [[ "$sid" =~ ^[A-Za-z0-9._:-]{1,128}$ ]] || die 2 "--session needs an id of [A-Za-z0-9._:-]"
@@ -291,7 +292,7 @@ start) cmd_start ;;
 stop) cmd_stop "${2:-}" ;;
 status) cmd_status ;;
 on) cmd_on "${2:-}" ;;
-off) cmd_off ;;
+off) cmd_off "${2:-}" ;;
 log) cmd_log "${2:-}" "${3:-}" ;;
 -h | --help) usage 0 ;;
 *) usage 2 ;;

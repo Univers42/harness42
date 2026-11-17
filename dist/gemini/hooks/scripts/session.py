@@ -109,14 +109,17 @@ def route_guard(data):
     url = routed_url(host_root()) if route.is_file() else ""
     if not url or healthy(url):
         sys.exit(0)
-    rc, out = run(["bash", str(route), "off"], cwd=host_root())
+    # --keep-edited: a key the user changed since `on` stays, and the rest is restored,
+    # rather than the whole project left pointing at a dead proxy.
+    rc, out = run(["bash", str(route), "off", "--keep-edited"], cwd=host_root())
     if rc == 0:
+        kept = [ln[len("route: ") :] for ln in out.splitlines() if "route: kept" in ln]
         emit(
             {
                 "systemMessage": f"Switchyard is down at {url}, so devil turned "
                 "model routing off for this project. This session still points at "
                 "it: restart claude. To route again: devil route start, then "
-                "devil route on."
+                "devil route on." + "".join(f" {k[0].upper()}{k[1:]}." for k in kept)
             }
         )
     why = out.splitlines()[-1] if out else f"exit {rc}"

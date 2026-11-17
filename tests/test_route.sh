@@ -153,6 +153,13 @@ jq '.env.ANTHROPIC_MODEL = "claude-sonnet-5-5" | .modelOverrides["claude-haiku-5
   "$TMP/edited.json" >"$SETTINGS"
 run off
 check "off refuses an override the user changed since on (exit 1)" "[ $? -eq 1 ] && grep -q 'modelOverrides.claude-haiku-5-5' '$TMP/out'"
+cp "$TMP/edited.json" "$SETTINGS"
+: >"$TMP/out"
+run off --keep-edited
+check "off --keep-edited restores the rest and keeps the changed key" "[ $? -eq 0 ] && [ \"\$(jq -S . '$SETTINGS')\" = \"\$(jq -S '.env.ANTHROPIC_MODEL = \"mine\"' '$TMP/orig.json')\" ]"
+check "off --keep-edited names the key it kept" "grep -q 'kept as you changed them: env.ANTHROPIC_MODEL' '$TMP/out'"
+run off --bogus
+check "off with an unknown flag is exit 2" "[ $? -eq 2 ]"
 cp "$TMP/orig.json" "$SETTINGS"
 run on --judged
 check "on --judged sends the main loop to switchyard-judged" "jq -e '.modelOverrides[\"claude-sonnet-5-5\"] == \"switchyard-judged\"' '$SETTINGS' >/dev/null"
@@ -195,6 +202,8 @@ mkdir -p "$TMP/state/devil/switchyard/log"
 rows="$(cd "$HOST" && bash "$ROUTE" log | tail -n +2)"
 want=$'t\tswitchyard\tcapable\tclaude-opus-5-5\tfalse\t-\t9\t0.25'
 if [ "$rows" = "$want" ]; then ok "log prints one TSV row per call, and no outcome rows"; else no "log rows: $rows"; fi
+run status
+check "status counts the logged calls per route" "grep -q '^calls:     1 switchyard (since the last rotation)' '$TMP/out'"
 
 # --- the SessionStart guard -------------------------------------------------------
 # hooks.py route-guard probes the real loopback port (no curl), so the port is a free one.
@@ -214,6 +223,14 @@ case "$out" in
 *) no "the guard on a dead port said: ${out:0:160}" ;;
 esac
 check "the guard restores the settings exactly" "[ \"\$(jq -S . '$SETTINGS')\" = \"\$(jq -S . '$TMP/orig.json')\" ]"
+DEVIL_SWITCHYARD_PORT="$P" run on
+jq '.env.ANTHROPIC_MODEL = "mine"' "$SETTINGS" >"$TMP/e.json" && cp "$TMP/e.json" "$SETTINGS"
+out="$(guard)"
+if [[ "$out" == *"turned model routing off"*"Kept as you changed them: env.ANTHROPIC_MODEL."* ]] &&
+  [ "$(jq -S . "$SETTINGS")" = "$(jq -S '.env.ANTHROPIC_MODEL = "mine"' "$TMP/orig.json")" ]; then
+  ok "with a key changed since on, the guard still turns routing off and keeps that key"
+else no "the guard with an edited key said: ${out:0:200}"; fi
+cp "$TMP/orig.json" "$SETTINGS"
 DEVIL_SWITCHYARD_PORT="$P" run on
 # An exported kit (codex, copilot) ships hooks/ without tools/: it must stay silent.
 mkdir -p "$TMP/kit" && cp -r "$ROOT/hooks" "$TMP/kit/"
