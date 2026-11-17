@@ -11,6 +11,8 @@ agree, and `bash tools/release.sh bump <major|minor|patch>` cuts the next one.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-17
+
 ### Changed
 
 - CI runs `tools/skillcheck.sh --strict`: the A14 `Use when` migration left no
