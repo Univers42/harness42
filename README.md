@@ -266,7 +266,7 @@ only on a matching file.
 | `debug` | stable | a test fails, a build breaks, a crash has no obvious cause, behaviour differs between machines, or a fix that worked yesterday stopped working |
 | `design-review` | stable | a design is described as feeling off, crowded or unfinished and the cause has not been named yet |
 | `doc-sync` | stable | a flag was renamed, a path moved, a default changed, a command was removed, or a README example no longer matches what the code prints |
-| `flow` | beta | a change is ready to check before merge, or a diff needs a review |
+| `flow` | stable | a change is ready to check before merge, or a diff needs a review |
 | `flow-author` | beta | the same sequence of commands, checks and one review keeps being done by hand or by a fan-out of agents |
 | `frontend` | stable | a page or a component is being added or restyled, when a layout breaks on a narrow screen or in dark mode, or when a view has no empty, loading or error state |
 | `grill` | beta | a request is underspecified, the done-when is not stateable, or a rules/risk.md trigger is unresolved before code starts |

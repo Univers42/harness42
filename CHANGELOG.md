@@ -13,6 +13,10 @@ agree, and `bash tools/release.sh bump <major|minor|patch>` cuts the next one.
 
 ### Changed
 
+- The `flow` skill is `stable`. `tests/scenarios/flow.md` records two measured runs: a
+  review (the same five merge blockers as the agent fan-out, for $0.088 against $1.15)
+  and a whole `/devil:feature` against the 1.1.1 kit ($0.31 against $0.53, the same
+  verdict). `flow-author` stays `beta`: no run has measured writing a flow.
 - The SessionStart route guard runs `devil route off --keep-edited`: when the proxy is
   down and you changed a routed key since `on`, routing still goes off, your change
   stays, and the message names it. Before, that refusal left the project pointing at

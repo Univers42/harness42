@@ -8,7 +8,7 @@ description: >
   Auto-triggers on: "run the gate", "review my diff", "is this ready to merge"
 allowed-tools: Bash, Read
 metadata:
-  stage: beta
+  stage: stable
   since: "1.2.0"
 ---
 
