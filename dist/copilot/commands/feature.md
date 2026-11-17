@@ -17,8 +17,10 @@ If `$ARGUMENTS` is empty, ask what to build and stop.
 
 ## 1. Ground
 
-- Run `devil digest` — toolchain, codemap, untested worklist, duplication
-  candidates. Decide from the digest, never from a guess about the tree.
+- Read the digest — toolchain, codemap, untested worklist, duplication candidates.
+  The session opened with it (the SessionStart project briefing); run `devil digest`
+  only when that briefing is missing or cut short. Decide from the digest, never from
+  a guess about the tree.
 - Run `devil preflight` — a missing `.env` or credential fails here, not ten
   minutes into a build (`rules/run-safely.md`).
 
@@ -49,7 +51,10 @@ doc for a function.
 
 ## 5. Build
 
-Hand the spec (and any conditions from step 3) to `agents/builder.md`:
+Record `git rev-parse HEAD` before the first change: it is the gate's base in step 6.
+Hand the spec (and any conditions from step 3) to `agents/builder.md`, with
+`gate: flow` in the brief's Constraints, so the builder runs only the tests that cover
+its change and the full gate runs once, in step 6:
 
 - **Library-first** — the primitive goes in the library, tested there, before the
   feature glues it together (`rules/library-first.md`). Act on every
@@ -61,12 +66,27 @@ Hand the spec (and any conditions from step 3) to `agents/builder.md`:
 
 ## 6. Converge on the gate
 
-Fan in here; run these against the same tree:
+Write the spec, with any step-3 conditions as acceptance criteria, to
+`.claude/cache/spec.md`. Then run the gate once, as code (the `flow` skill), in the
+background:
 
-- `devil quality --with-tests` — every relevant gate green at the strictest
-  flags. A skipped gate is uncovered surface: name it (`rules/quality-bar.md`).
-- `reviewer` — correctness, contracts, leaks, bloat.
-- `security` — only if the feature touches untrusted input, auth, secrets or crypto.
+```sh
+devil flow run gate --base <the sha from step 5> --spec .claude/cache/spec.md
+```
+
+It takes the diff, runs `devil quality --with-tests` at the strictest flags, then one
+headless review against the `reviewer` and `security` rubrics, and ends with the return
+block. A skipped gate is uncovered surface: name it (`rules/quality-bar.md`).
+
+| Exit | Do |
+| --- | --- |
+| 0 | green: go to step 7 |
+| 1 | back to step 5 with what `next:` names (a gate's log, or each BLOCKER, CRITICAL or HIGH finding), then run the flow again |
+| 124 | a step hung: fix the hang the log shows, never the timeout |
+| 2 or 3, or no `devil` | the fan-out instead, against the same tree: `devil quality --with-tests`, `reviewer`, and `security` if the feature touches untrusted input, auth, secrets or crypto |
+
+Then the measurements a flow does not take:
+
 - `benchmarker` — only if a hot path changed. A number against a baseline, no adjectives.
 - Rendered UI? The `browser-testing` skill for real evidence, and the `frontend` skill's
   a11y pass.
@@ -87,8 +107,9 @@ tree left for someone else.**
 | Tests added, with pass output | |
 | Primitives extracted into the library | |
 | Duplication before → after | |
-| Gate status (`devil quality --with-tests`) | |
+| Gate status (the flow's return block, or `devil quality --with-tests`) | |
 | Verdict and conditions, if step 3 ran | |
 
-Plus: the reviewer and security findings, what you reverted, and the exact commands
-that reproduce every number above. Green or reverted, never a half-built tree.
+Plus: the review's findings (the flow's `report:` path, or the reviewer and security
+tables), what you reverted, and the exact commands that reproduce every number above.
+Green or reverted, never a half-built tree.

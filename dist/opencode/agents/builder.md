@@ -85,6 +85,9 @@ conclusions, not raw trees.
 
 - Run `devil quality`. Every relevant gate green at the strictest flags
   (`rules/quality-bar.md`). A skipped gate is uncovered surface — name it.
+- Brief says `gate: flow`? The caller runs the full gate once as a flow after you, so
+  run only the tests that cover your change, and report `devil quality` as
+  `SKIP (gate: flow)`. Without that line, nothing changes.
 - Hot path touched? Cite a number, not an adjective (`benchmarker` discipline).
 
 ### 5. Report: the return block, verbatim

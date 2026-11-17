@@ -19,7 +19,9 @@ If `$ARGUMENTS` is empty, run `devil untested` and propose the top candidate.
 
 You cannot claim an improvement without a before.
 
-- `devil digest` for the map; `devil untested` for what has no test.
+- The SessionStart briefing for the map (`devil digest` if it is missing);
+  `devil untested` for what has no test.
+- Record `git rev-parse HEAD`: it is the gate's base in step 6.
 - Run the existing suite and record the result. Green now, or fix that first.
 - Record the current numbers if this is a hot path: latency p50/p95/p99, memory,
   allocations (`agents/benchmarker.md`). Save the artifact — every later claim cites it.
@@ -79,8 +81,12 @@ The failures that page you are the unbounded ones:
 
 ## 6. Prove it held
 
-- `devil quality --with-tests` green at the strictest flags.
-- `reviewer` on the full diff.
+- Write the contract to `.claude/cache/spec.md`: the target, "no behavior change", and
+  every resource step 4 bounded. Then run the gate once, as code (the `flow` skill):
+  `devil flow run gate --base <the sha from step 1> --spec .claude/cache/spec.md`. It
+  runs `devil quality --with-tests` at the strictest flags, then one review of the full
+  diff. Act on its exit as `/devil:feature` step 6 does; on exit 2 or 3, or with no
+  `devil`, run `devil quality --with-tests` and `reviewer` on the full diff instead.
 - Re-run the step-1 benchmark: hardening costs something, and the honest number is the
   deliverable. A regression over 5% on a hot path needs a stated reason or a fix.
 - `devil dupes` — hardening often duplicates a guard three times. Extract it.
