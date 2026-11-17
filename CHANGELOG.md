@@ -54,10 +54,12 @@ agree, and `bash tools/release.sh bump <major|minor|patch>` cuts the next one.
 - A synchronous SessionStart hook (`hooks.py route-guard`) turns routing off when the
   project is routed and the proxy is down, and asks for a restart: the session it runs
   in still points at the dead proxy, and the next one does not.
-- A routed flow review goes to Switchyard's `devil-review` route, tagged with the run's
-  session ID, and the report's `## Cost` section is Switchyard's per-model routing log
-  for that session. When the project is not routed, the cost is the CLI's client-side
-  estimate, labelled as such.
+- A routed flow review goes to the review step's Switchyard `route` (default
+  `devil-review`), tagged with the run's session ID, with the betas Switchyard drops
+  turned off, and the report's `## Cost` section is Switchyard's per-model routing log
+  for that session. A route the proxy does not serve fails before any call (exit 3), and
+  `--dry-run` shows the route and the proxy. When the project is not routed, the cost is
+  the CLI's client-side estimate, labelled as such.
 - `rules/pull-requests.md`: a PR is understood from its title and first line; the
   body runs why → what → structure → trade-offs → openings → evidence, visible
   changes ship before/after media, and a not-ready PR is a draft, never a red build.

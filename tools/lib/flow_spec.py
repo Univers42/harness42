@@ -24,7 +24,7 @@ MODEL = re.compile(r"[A-Za-z0-9._:\[\]-]{1,80}")
 STEP_KEYS = {
     "run": {"name", "type", "run", "expect", "timeout", "idle"},
     "assert": {"name", "type", "run", "message", "timeout"},
-    "review": {"name", "type", "model", "budget_usd", "timeout"}
+    "review": {"name", "type", "model", "route", "budget_usd", "timeout"}
     | {"max_diff_bytes", "rubric"},
 }
 # key: (default, lowest, highest), per step type
@@ -93,12 +93,15 @@ def _rubric(raw, errs):
 
 def _review(raw, step, errs):
     model, budget = raw.get("model", "opus"), raw.get("budget_usd", 3)
-    if not isinstance(model, str) or not MODEL.fullmatch(model):
-        errs.append(f"model must match {MODEL.pattern}, got {model!r}")
+    route = raw.get("route", "devil-review")  # the model when routed (devil route on)
+    for key, value in (("model", model), ("route", route)):
+        if not isinstance(value, str) or not MODEL.fullmatch(value):
+            errs.append(f"{key} must match {MODEL.pattern}, got {value!r}")
     ok = isinstance(budget, (int, float)) and not isinstance(budget, bool)
     if not ok or not 0.01 <= budget <= 50:
         errs.append(f"budget_usd must be a number in 0.01..50, got {budget!r}")
-    step.update(model=model, budget_usd=budget, rubric=_rubric(raw, errs), run="")
+    step.update(model=model, route=route, budget_usd=budget, run="")
+    step["rubric"] = _rubric(raw, errs)
     return step
 
 

@@ -33,6 +33,7 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True  # keep the kit free of __pycache__, as hooks.py does
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I drops the script dir
+import flow_cost  # noqa: E402
 import flow_report  # noqa: E402
 import flow_review  # noqa: E402
 from flow_spec import KIT, ROOT, Invalid, all_flows, load  # noqa: E402
@@ -189,8 +190,10 @@ def _plan(step):
         limits = f"idle {step['idle']}s, expect {step['expect']}"
         return [limits, *step["run"].strip().splitlines()]
     rubric = ", ".join(os.path.relpath(r, KIT) for r in step["rubric"])
+    url = flow_cost.routing.routed_url(ROOT)
+    model = f"{step['route']} (Switchyard at {url})" if url else step["model"]
     return [
-        f"claude -p --model {step['model']}, budget ${step['budget_usd']}, no tools",
+        f"claude -p --model {model}, budget ${step['budget_usd']}, no tools",
         f"diff cut at {step['max_diff_bytes']} bytes; rubric: {rubric}",
     ]
 

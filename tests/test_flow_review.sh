@@ -39,7 +39,8 @@ mkdir -p "$TMP/bin" "$FAKE" "$TMP/nobin"
 cat >"$TMP/bin/claude" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\0' "$@" >"$FAKE_DIR/argv"
-printf '%s\n' "${ANTHROPIC_BASE_URL:-}" "${ANTHROPIC_CUSTOM_HEADERS:-}" >"$FAKE_DIR/env"
+printf '%s\n' "${ANTHROPIC_BASE_URL:-}" "${ANTHROPIC_CUSTOM_HEADERS:-}" \
+  "betas-off=${CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS:-}" >"$FAKE_DIR/env"
 cat >"$FAKE_DIR/stdin"
 ok='"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.0123'
 clean='"summary":"fine","checked":"inputs and paths"'
@@ -198,11 +199,12 @@ bad r-escape $'[[step]]\nname = "r"\ntype = "review"\nrubric = ["../../../../etc
 bad r-abs $'[[step]]\nname = "r"\ntype = "review"\nrubric = ["/etc/passwd"]'
 bad r-missing $'[[step]]\nname = "r"\ntype = "review"\nrubric = ["agents/nosuch.md"]'
 bad r-model $'[[step]]\nname = "r"\ntype = "review"\nmodel = "opus; rm -rf /"'
+bad r-route $'[[step]]\nname = "r"\ntype = "review"\nroute = "x $(id)"'
 bad r-budget $'[[step]]\nname = "r"\ntype = "review"\nbudget_usd = 500'
 bad r-bool $'[[step]]\nname = "r"\ntype = "review"\nbudget_usd = true'
 bad r-run $'[[step]]\nname = "r"\ntype = "review"\nrun = "echo hi"'
 bad r-short $'[[step]]\nname = "r"\ntype = "review"\ntimeout = 5'
-for f in r-notlast r-two r-escape r-abs r-missing r-model r-budget r-bool r-run r-short; do
+for f in r-notlast r-two r-escape r-abs r-missing r-model r-route r-budget r-bool r-run r-short; do
   if flow check "$f" >/dev/null 2>&1; then no "check accepted $f"; else ok "check refuses $f"; fi
 done
 rm -f "$FLOWS"/r-*.toml
@@ -214,6 +216,7 @@ if flow check gate review >/dev/null 2>&1; then ok "check passes the shipped gat
 P="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
 WWW="$TMP/www"
 mkdir -p "$WWW/v1/routing" && touch "$WWW/health"
+echo '{"data":[{"id":"devil-review"},{"id":"my-review"}]}' >"$WWW/v1/models"
 priced='"cost":{"known_usd":0.21,"unknown_calls":0,"total_usd":0.21},"calls":1,"prompt_tokens":1200,"completion_tokens":300'
 unpriced='"cost":{"known_usd":0,"unknown_calls":1,"total_usd":null},"calls":2,"prompt_tokens":50,"completion_tokens":5'
 printf '{"cost":{"known_usd":0.21,"unknown_calls":1,"total_usd":null},"models":{"claude-opus-5-5":{%s},"odd|model":{%s}}}\n' \
@@ -227,8 +230,9 @@ review approve
 sid="devil-flow-$(basename "$run")"
 if [ "$rc" -eq 0 ] && argv | grep -A1 -x -- '--model' | sed -n 2p | grep -qx devil-review &&
   [ "$(sed -n 1p "$FAKE/env")" = "http://127.0.0.1:$P" ] &&
-  grep -qx "x-switchyard-session-id: $sid" "$FAKE/env" && grep -qx 'x-switchyard-origin: devil-flow' "$FAKE/env"; then
-  ok "a routed review goes to the devil-review route, tagged with its own session id"
+  grep -qx "x-switchyard-session-id: $sid" "$FAKE/env" && grep -qx 'x-switchyard-origin: devil-flow' "$FAKE/env" &&
+  grep -qx 'betas-off=1' "$FAKE/env"; then
+  ok "a routed review goes to the devil-review route, tagged, with the betas Switchyard drops off"
 else no "routed call: rc=$rc $(tr '\n' ' ' <"$FAKE/env")"; fi
 if jq -e --arg s "$sid" '.review.model == "devil-review" and (.review.cost | .source == "switchyard" and
   .session == $s and .usd == null and .known_usd == 0.21 and .unknown_calls == 1 and (.models | length) == 2)' \
@@ -238,6 +242,23 @@ if jq -e --arg s "$sid" '.review.model == "devil-review" and (.review.cost | .so
   grep -qxF '| odd\|model | 2 | 50 | 5 | unpriced |' "$run/report.md"; then
   ok "the cost is Switchyard's, per model; an unpriced call leaves the total unknown"
 else no "routed cost: $(jq -c .review.cost "$run/report.json")"; fi
+
+if flow run review --dry-run >"$TMP/out" 2>&1 &&
+  grep -qF "claude -p --model devil-review (Switchyard at http://127.0.0.1:$P), budget" "$TMP/out"; then
+  ok "--dry-run of a routed project shows the route and the proxy"
+else no "routed dry run: $(grep 'claude -p' "$TMP/out")"; fi
+
+sed 's/^type = "review"$/&\nroute = "my-review"/' "$ROOT/flows/review.toml" >"$FLOWS/review.toml"
+review approve
+if [ "$rc" -eq 0 ] && argv | grep -A1 -x -- '--model' | sed -n 2p | grep -qx my-review; then
+  ok "a host flow's review route is the one called"
+else no "custom route: rc=$rc"; fi
+sed -i 's/^route = "my-review"$/route = "nosuch"/' "$FLOWS/review.toml"
+review approve
+if [ "$rc" -eq 3 ] && [ ! -e "$FAKE/argv" ] && grep -q "^next: .*serves no route nosuch" "$TMP/out"; then
+  ok "a route the proxy does not serve is exit 3 before any call"
+else no "missing route: rc=$rc $(grep '^next' "$TMP/out")"; fi
+rm "$FLOWS/review.toml"
 
 rm "$WWW/v1/routing/session-stats"
 review approve

@@ -13,8 +13,9 @@ agents. Everything the call saw and said is kept in <run>/review/.
 Caveat: the diff is cut at max_diff_bytes by whole files; the files left out are named in a
 MAJOR "not reviewed" finding and in the report's deviations, but an APPROVE covers only the
 files the model saw. The cost is flow_cost.py's: when the project is routed (`devil route
-on`), the call goes to Switchyard's devil-review route and the cost is its routing log's;
-otherwise the CLI's client-side figure (total_cost_usd). Neither is a bill.
+on`), the call goes to the step's Switchyard route (default devil-review) and the cost is
+its routing log's; otherwise the CLI's client-side figure (total_cost_usd). Neither is a
+bill.
 """
 
 import json
@@ -191,9 +192,9 @@ def run(step, run_dir, env):
     review, out, reason, url = None, "", "", ""
     model, session = step["model"], flow_cost.session_id(run_dir)
     try:
-        url = flow_cost.route(ROOT)
+        url = flow_cost.route(ROOT, step["route"])
         if url:
-            env, model = flow_cost.routed_env(env, url, session), flow_cost.ROUTE
+            env, model = flow_cost.routed_env(env, url, session), step["route"]
         rc, out, omitted = _ask(step, run_dir, env, model)
         review = apply_policy(verdict_of(rc, out), omitted)
     except ReviewError as err:

@@ -1,14 +1,14 @@
 """flow_cost.py: what a flow's review cost, and through what.
 
 A project routed with `devil route on` sends the review through the local Switchyard: pinned
-to its ROUTE, and tagged with a per-run session id, so the cost comes from Switchyard's own
+to the step's `route` (default devil-review), and tagged with a per-run session id, so the cost comes from Switchyard's own
 routing log (/v1/routing/session-stats), per served model. Otherwise it is the CLI's
 client-side estimate (total_cost_usd). Neither is a bill.
 
 Caveat: Switchyard prices a call from the provider's reported charge, else from its bundled
 rates, and a model with no rate leaves the total unknown: the report then says so and shows
-the priced subtotal as a subtotal. ROUTE is the id templates/switchyard/routes.toml ships; a
-host that renames it gets a review that fails (exit 3) and falls back to the agents.
+the priced subtotal as a subtotal. A route the proxy does not serve fails the review before
+any call (exit 3), which falls back to the agents.
 """
 
 import sys
@@ -21,7 +21,6 @@ from flow_verdict import ReviewError
 sys.path.append(str(KIT / "hooks" / "scripts"))
 import routing  # noqa: E402
 
-ROUTE = "devil-review"
 ORIGIN = "devil-flow"
 HEADER = ("Model", "Calls", "Prompt tokens", "Completion tokens", "USD")
 # Switchyard appends a call's record once its stream drains, which can be just after the
@@ -29,14 +28,24 @@ HEADER = ("Model", "Calls", "Prompt tokens", "Completion tokens", "USD")
 TRIES, PAUSE = 5, 0.4
 
 
-def route(root):
-    """The proxy the project at root is routed through, or "". Routed and down is an
-    error: the review would only fail against it, and say less about why."""
+def route(root, name):
+    """The proxy the project at root is routed through, or "". Routed and down, or with
+    no route `name`, is an error: the review would only fail there, and say less why."""
     url = routing.routed_url(root)
-    if url and not routing.healthy(url):
+    if not url:
+        return ""
+    if not routing.healthy(url):
         raise ReviewError(
             f"this project routes through Switchyard at {url}, which is down: "
             "devil route start, or devil route off"
+        )
+    listed = routing.get_json(url + "/v1/models")
+    data = listed.get("data") if isinstance(listed, dict) else None
+    data = data if isinstance(data, list) else []
+    if name not in {m.get("id") for m in data if isinstance(m, dict)}:
+        raise ReviewError(
+            f"Switchyard at {url} serves no route {name}: "
+            "devil route status lists them; set the review step's route to one"
         )
     return url
 
@@ -50,8 +59,13 @@ def routed_env(env, url, session):
     kept = env.get("ANTHROPIC_CUSTOM_HEADERS", "").splitlines()
     kept = [h for h in kept if h and not h.lower().startswith("x-switchyard-")]
     tags = [f"x-switchyard-session-id: {session}", f"x-switchyard-origin: {ORIGIN}"]
+    # Switchyard forwards only the oauth-* betas, so a request that needs another fails
+    # (HTTP 400): turn them off here, since --bare skips the settings `devil route on` wrote.
     return dict(
-        env, ANTHROPIC_BASE_URL=url, ANTHROPIC_CUSTOM_HEADERS="\n".join(kept + tags)
+        env,
+        ANTHROPIC_BASE_URL=url,
+        ANTHROPIC_CUSTOM_HEADERS="\n".join(kept + tags),
+        CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS="1",
     )
 
 

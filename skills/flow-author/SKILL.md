@@ -52,7 +52,7 @@ budget_usd = 3
 | --- | --- | --- |
 | `run` | `run`, `expect` (0 or `"nonzero"`), `timeout` (300), `idle` (120) | a bash body under the watchdog; `idle = 0` for a step that is silent for minutes |
 | `assert` | `run`, `message` (required), `timeout` (30) | a fast check; on failure the caller reads `message` |
-| `review` | `model` (`opus`), `budget_usd` (3), `timeout` (600), `max_diff_bytes` (200000), `rubric` | one headless `claude -p` with no tools, judged against `rubric` (default: the reviewer and security agents) |
+| `review` | `model` (`opus`), `route` (`devil-review`), `budget_usd` (3), `timeout` (600), `max_diff_bytes` (200000), `rubric` | one headless `claude -p` with no tools, judged against `rubric` (default: the reviewer and security agents); `route` replaces `model` when the project is routed (`devil route on`) |
 
 A body runs from the host root with `set -eo pipefail` and stdin closed. Each step sees
 `FLOW_RUN_ID`, `FLOW_RUN_DIR`, `FLOW_OUT`, `FLOW_BASE`, `FLOW_ROOT`, `FLOW_SPEC` and the
