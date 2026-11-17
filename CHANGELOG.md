@@ -15,9 +15,42 @@ agree, and `bash tools/release.sh bump <major|minor|patch>` cuts the next one.
 
 - CI runs `tools/skillcheck.sh --strict`: the A14 `Use when` migration left no
   warning, so a beta skill that drops its triggers now fails the build.
+- `/devil:feature` and `/devil:harden` run their gate once as `devil flow run gate`
+  instead of fanning out to `devil quality` plus the `reviewer` and `security` agents.
+  The fan-out is still the fallback when the flow exits 2 or 3, or when `devil` is not
+  on PATH. A builder briefed with `gate: flow` runs only the tests that cover its
+  change, so the full gate runs once.
 
 ### Added
 
+- `devil flow run|list|show|check` (`tools/flow.sh`, `tools/lib/flow*.py`): a workflow
+  written once as TOML and run by code. `flows/gate.toml` fetches the diff, runs
+  `devil quality --with-tests`, then makes one tool-less, schema-checked review call
+  whose rubric is `agents/reviewer.md` and `agents/security.md`. `flows/review.toml` is
+  the review alone. Each run writes `report.md` and `report.json` under
+  `.claude/cache/runs/` (the newest 20 are kept) and ends stdout with the
+  `templates/agent-brief.md` return block. A host overrides a flow by name in
+  `.claude/flows/`. Exit 0 green, 1 failed or changes requested, 2 invalid, 3 no
+  verdict, 124 hung.
+- `skills/flow` and `skills/flow-author` (beta): run the gate as a flow and act on its
+  exit code; write a new flow once and check it with `devil flow check` and `--dry-run`.
+- `tools/quality.sh --logs=DIR` keeps each gate's output in `DIR/<gate>.log` and the
+  board in `DIR/results.tsv`; without the flag nothing changes.
+- `devil orch diff` (`tools/orch/diff.sh`): the merge-base to working-tree diff with
+  untracked files included, as `diff.patch` and `changed.txt`.
+- `devil route build|start|stop|status|on|off|log` (`tools/route.sh`): NVIDIA
+  Switchyard at a pinned commit, in a read-only, capability-dropped container bound to
+  127.0.0.1. `on` routes one project through `.claude/settings.local.json` (refused
+  unless the file is git-ignored and the proxy answers), and `off` restores the
+  previous values. No key is stored: the caller's login is forwarded. The routes are
+  seeded from `templates/switchyard/routes.toml`.
+- A synchronous SessionStart hook (`hooks.py route-guard`) turns routing off when the
+  project is routed and the proxy is down, and asks for a restart: the session it runs
+  in still points at the dead proxy, and the next one does not.
+- A routed flow review goes to Switchyard's `devil-review` route, tagged with the run's
+  session ID, and the report's `## Cost` section is Switchyard's per-model routing log
+  for that session. When the project is not routed, the cost is the CLI's client-side
+  estimate, labelled as such.
 - `rules/pull-requests.md`: a PR is understood from its title and first line; the
   body runs why → what → structure → trade-offs → openings → evidence, visible
   changes ship before/after media, and a not-ready PR is a draft, never a red build.

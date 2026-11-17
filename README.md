@@ -191,6 +191,8 @@ directory, so `devil digest` describes the project you are in.
 | `dupes.sh` | "What should I pull into the shared library?" |
 | `quality.sh` | "Is this actually up to standard?" — the gate, read-only |
 | `watch.sh` | "Run this without letting it hang" — timeouts around any command |
+| `flow.sh` | "Run the gate the same way every time" — a TOML workflow run by code, one review call |
+| `route.sh` | "Send each Claude call to the model it needs" — NVIDIA Switchyard on 127.0.0.1 |
 | `selfcheck.sh` | "Does this config tell the truth about itself?" — the drift gate |
 | `context.sh` | "What does this config cost me every session?" |
 | `caveat.sh` | "Which approximations here don't admit they're approximations?" |
@@ -201,6 +203,8 @@ directory, so `devil digest` describes the project you are in.
 devil digest                         # brief yourself first (cached)
 devil quality --with-tests           # the strict gate; exit 1 means a real failure
 devil watch --idle 60 -- make build  # never wait forever on a stuck process
+devil flow run gate --base main      # diff, lint, tests, one review, one report
+devil route on                       # route this project through Switchyard
 devil scripts list                   # the vetted external script library
 ```
 
