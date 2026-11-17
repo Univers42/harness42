@@ -12,8 +12,9 @@ agents. Everything the call saw and said is kept in <run>/review/.
 
 Caveat: the diff is cut at max_diff_bytes by whole files; the files left out are named in a
 MAJOR "not reviewed" finding and in the report's deviations, but an APPROVE covers only the
-files the model saw. The cost is the CLI's own client-side figure (total_cost_usd), not a
-bill.
+files the model saw. The cost is flow_cost.py's: when the project is routed (`devil route
+on`), the call goes to Switchyard's devil-review route and the cost is its routing log's;
+otherwise the CLI's client-side figure (total_cost_usd). Neither is a bill.
 """
 
 import json
@@ -24,6 +25,7 @@ import signal
 import subprocess
 import time
 
+import flow_cost
 from flow_spec import ROOT
 from flow_verdict import SCHEMA, ReviewError, apply_policy, verdict_of
 
@@ -116,11 +118,11 @@ def user_prompt(run_dir, step, nonce):
 # --- the call ----------------------------------------------------------------
 
 
-def command(step, system):
+def command(step, system, model):
     claude = shutil.which("claude")
     if claude is None:
         raise ReviewError("claude is not on PATH")
-    cmd = [claude, "-p", "--output-format", "json", "--model", step["model"]]
+    cmd = [claude, "-p", "--output-format", "json", "--model", model]
     cmd += ["--json-schema", json.dumps(SCHEMA), "--system-prompt", system]
     cmd += ["--tools", "", "--disallowedTools", "mcp__*", "--strict-mcp-config"]
     cmd += ["--permission-mode", "dontAsk", "--no-session-persistence"]
@@ -161,14 +163,14 @@ def call(cmd, prompt, env, timeout):
 # --- the step ----------------------------------------------------------------
 
 
-def _ask(step, run_dir, env):
+def _ask(step, run_dir, env, model):
     """(rc, stdout, omitted): one claude call, with what went in and came out kept."""
     folder, nonce = run_dir / "review", secrets.token_hex(12)
     prompt, omitted = user_prompt(run_dir, step, nonce)
     system = system_prompt(step)
     (folder / "system.md").write_text(system)
     (folder / "prompt.md").write_text(prompt)
-    rc, out, err = call(command(step, system), prompt, env, step["timeout"])
+    rc, out, err = call(command(step, system, model), prompt, env, step["timeout"])
     (folder / "raw.json").write_text(out)
     (folder / "stderr.txt").write_text(err)
     return rc, out, omitted
@@ -186,9 +188,13 @@ def run(step, run_dir, env):
     """Run the review step; the result has the shape flow.run_step returns."""
     started, folder = time.monotonic(), run_dir / "review"
     folder.mkdir(exist_ok=True)
-    review, out, reason = None, "", ""
+    review, out, reason, url = None, "", "", ""
+    model, session = step["model"], flow_cost.session_id(run_dir)
     try:
-        rc, out, omitted = _ask(step, run_dir, env)
+        url = flow_cost.route(ROOT)
+        if url:
+            env, model = flow_cost.routed_env(env, url, session), flow_cost.ROUTE
+        rc, out, omitted = _ask(step, run_dir, env, model)
         review = apply_policy(verdict_of(rc, out), omitted)
     except ReviewError as err:
         reason = str(err)
@@ -196,16 +202,17 @@ def run(step, run_dir, env):
     status = {0: "PASS", 1: "FAIL", 3: "ERROR"}[rc]
     if review is not None:
         (folder / "review.json").write_text(json.dumps(review, indent=2) + "\n")
-    seconds, cost = round(time.monotonic() - started), _cost(out)
-    spent = "unknown" if cost is None else f"${cost:.4f}"
+    seconds = round(time.monotonic() - started)
+    cost = flow_cost.measure(_cost(out), url, session)
     log = folder / "review.log"
     log.write_text(
-        f"model {step['model']}, budget ${step['budget_usd']}, {seconds} s, "
-        f"cost {spent} (client figure)\n{status}: {reason or review['verdict']}\n"
+        f"model {model}, budget ${step['budget_usd']}, {seconds} s\n"
+        f"cost {flow_cost.describe(cost)[0]}\n{status}: {reason or review['verdict']}\n"
     )
     line = f"{status} {step['name']:<22} exit={rc:<3} expect={'0':<7} {seconds}s"
     return dict(
         step,
+        model=model,
         status=status,
         rc=rc,
         seconds=seconds,
@@ -213,5 +220,5 @@ def run(step, run_dir, env):
         line=line,
         review=review,
         reason=reason,
-        cost_usd=cost,
+        cost=cost,
     )

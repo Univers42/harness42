@@ -79,5 +79,7 @@ The flow's return block as printed, then:
 | --- | --- | ---: | --- | ---: | ---: |
 | | | | | | |
 
+- Cost is the report's `## Cost` line: Switchyard's routing log when the project is routed
+  (`devil route on`), else the CLI's client-side estimate. Say which; neither is a bill.
 - The `report:` path, and the fix made for each `next:` before the run that went green.
 - Files named in `deviations:` that the review never saw, and who reviewed them.

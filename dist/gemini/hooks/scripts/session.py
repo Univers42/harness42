@@ -5,22 +5,18 @@ survive compaction.
 
 import json
 import os
-import re
 import sys
-import urllib.request
 from pathlib import Path
 
 from kit import PLUGIN_ROOT, host_root
 from process import run
 from respond import context, emit
+from routing import SETTINGS, healthy, routed_url
 
 # Where setup.sh stamps the version of the rules it seeded, and where the
 # plugin's own version lives (A12: one version source).
 STAMP = ".claude/rules/devil/.version"
 PLUGIN_JSON = ".claude-plugin/plugin.json"
-# Where `devil route on` (tools/route.sh) points a project at a local Switchyard.
-ROUTED = ".claude/settings.local.json"
-LOOPBACK = re.compile(r"http://127\.0\.0\.1:[0-9]{1,5}")
 
 
 def _stamp_version():
@@ -98,28 +94,6 @@ def session_start(data):
     sys.exit(0)
 
 
-def _routed_url():
-    """The loopback proxy this project is routed through, or "" if it is not routed."""
-    try:
-        cfg = json.loads((Path(host_root()) / ROUTED).read_text())
-    except (OSError, ValueError):
-        return ""
-    env = cfg.get("env") if isinstance(cfg, dict) and "_devilRoute" in cfg else None
-    url = env.get("ANTHROPIC_BASE_URL") if isinstance(env, dict) else None
-    return url if isinstance(url, str) and LOOPBACK.fullmatch(url) else ""
-
-
-def _healthy(url):
-    # No proxy handler: an HTTP(S)_PROXY in the environment must not carry a
-    # loopback probe off the machine.
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    try:
-        with opener.open(url + "/health", timeout=2) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
-
-
 def route_guard(data):
     """Turn routing off when the proxy this project points at is down.
 
@@ -132,8 +106,8 @@ def route_guard(data):
     # never read ANTHROPIC_BASE_URL, so a project routed for Claude Code is not
     # theirs to fix.
     route = PLUGIN_ROOT / "tools" / "route.sh"
-    url = _routed_url() if route.is_file() else ""
-    if not url or _healthy(url):
+    url = routed_url(host_root()) if route.is_file() else ""
+    if not url or healthy(url):
         sys.exit(0)
     rc, out = run(["bash", str(route), "off"], cwd=host_root())
     if rc == 0:
@@ -150,7 +124,7 @@ def route_guard(data):
         {
             "systemMessage": f"Switchyard is down at {url}, and devil could not "
             f"turn routing off ({why}). Run devil route start, or fix "
-            f"{ROUTED}, then restart claude."
+            f"{SETTINGS}, then restart claude."
         }
     )
 

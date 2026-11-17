@@ -9,6 +9,8 @@ rendered in the column layouts of agents/reviewer.md and agents/security.md.
 import json
 import time
 
+import flow_cost
+
 VERDICT = {0: "PASS", 1: "FAIL", 3: "ERROR", 124: "TIMEOUT"}
 MAX_CHANGED = 20
 MAX_NEXT = 5  # findings named in the return block's `next`; the rest are in report.md
@@ -155,15 +157,19 @@ AREA_TABLES = {
 }
 
 
-def _review_md(review):
-    usd = review["cost"]["usd"]
-    spent = "unknown" if usd is None else f"${usd:.4f}"
-    lines = [
+def _cost_md(cost):
+    line, rows = flow_cost.describe(cost)
+    return [
         "",
-        "## Review",
+        "## Cost",
         "",
-        f"- Model: `{review['model']}`; cost {spent} (the CLI's client-side figure, not a bill)",
+        line,
+        *(["", *_table(flow_cost.HEADER, rows)] if rows else []),
     ]
+
+
+def _review_md(review):
+    lines = ["", "## Review", "", f"- Model: `{review['model']}`"]
     if review["status"] == "ERROR":
         return [
             *lines,
@@ -223,7 +229,7 @@ def markdown(report, run_dir):
             *_table(("Result", "Gate", "Category", "Log"), gate_rows),
         ]
     if report["review"]:
-        lines += _review_md(report["review"])
+        lines += _review_md(report["review"]) + _cost_md(report["review"]["cost"])
     lines += ["", "## Return block", "", "```text", return_block(report), "```", ""]
     return "\n".join(lines)
 
@@ -234,9 +240,8 @@ def _review_of(results):
     if not ran:
         return None
     r = ran[0]
-    cost = {"usd": r["cost_usd"], "source": "client"}
     head = {"status": r["status"], "model": r["model"], "reason": r["reason"]}
-    return {**head, "cost": cost, **(r["review"] or {})}
+    return {**head, "cost": r["cost"], **(r["review"] or {})}
 
 
 def write(run_dir, flow, meta, results, code):

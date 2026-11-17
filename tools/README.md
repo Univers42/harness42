@@ -23,7 +23,7 @@ and 2 for a name it does not know. An enabled plugin has its `bin/` on the Bash 
 | `untested.sh` | "What needs a test before I touch it?" (the TDD worklist) | source vs tests |
 | `dupes.sh` | "What should I extract into the library?" | repeated blocks |
 | `quality.sh` | "Is it the highest quality — strictly?" (the gate) | every strict linter / SAST / audit |
-| `flow.sh` | "Run the gate the same way every time": a workflow written once as TOML (`flows/`, or a host's `.claude/flows/`), run by code; steps, gates and a return block in one report | the flow file, then whatever its steps run; reports under `.claude/cache/runs/` |
+| `flow.sh` | "Run the gate the same way every time": a workflow written once as TOML (`flows/`, or a host's `.claude/flows/`), run by code; steps, gates, the review's cost (Switchyard's, when routed) and a return block in one report | the flow file, then whatever its steps run; reports under `.claude/cache/runs/` |
 | `route.sh` | "Send each Claude call to the model it needs": NVIDIA Switchyard (a pinned commit) in a hardened container on 127.0.0.1, and `on`/`off` for one project's `settings.local.json`; no key stored, the caller's login is forwarded | `${XDG_STATE_HOME}/devil/switchyard/` (routes, log, routed projects), the host's `.claude/settings.local.json` |
 | `watch.sh` | "Run this without ever hanging" — hard + idle timeouts around any command | wraps a command |
 | `selfcheck.sh` | "Does this config tell the truth about itself?" (the drift gate) | every doc + every frontmatter block |

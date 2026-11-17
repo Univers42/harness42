@@ -19,7 +19,7 @@ no() {
 }
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+trap 'kill ${SRV:-} 2>/dev/null; rm -rf "$TMP"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 unset ANTHROPIC_API_KEY
 
@@ -39,6 +39,7 @@ mkdir -p "$TMP/bin" "$FAKE" "$TMP/nobin"
 cat >"$TMP/bin/claude" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\0' "$@" >"$FAKE_DIR/argv"
+printf '%s\n' "${ANTHROPIC_BASE_URL:-}" "${ANTHROPIC_CUSTOM_HEADERS:-}" >"$FAKE_DIR/env"
 cat >"$FAKE_DIR/stdin"
 ok='"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.0123'
 clean='"summary":"fine","checked":"inputs and paths"'
@@ -78,7 +79,7 @@ FAKE_CLAUDE=approve flow run review --base main --spec "$TMP/spec.md" >"$TMP/out
 rc=$?
 run="$(newest)"
 if [ "$rc" -eq 0 ] && grep -q '^status: done' "$TMP/out" &&
-  jq -e '.review.verdict == "APPROVE" and .review.cost.usd == 0.0123 and .review.status == "PASS"' \
+  jq -e '.review.verdict == "APPROVE" and .review.cost == {source: "client", usd: 0.0123} and .review.status == "PASS"' \
     "$run/report.json" >/dev/null && [ -f "$run/review/review.json" ]; then
   ok "APPROVE: exit 0, status done, verdict and cost in report.json"
 else no "approve: rc=$rc $(tail -3 "$TMP/err")"; fi
@@ -207,8 +208,54 @@ done
 rm -f "$FLOWS"/r-*.toml
 if flow check gate review >/dev/null 2>&1; then ok "check passes the shipped gate and review flows"; else no "shipped flows fail check"; fi
 
+# --- routed through Switchyard (`devil route on`): the route, the tags, its cost ------
+# A real http.server on a free loopback port stands in for Switchyard; it ignores the
+# query string, so v1/routing/session-stats is one file.
+P="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+WWW="$TMP/www"
+mkdir -p "$WWW/v1/routing" && touch "$WWW/health"
+priced='"cost":{"known_usd":0.21,"unknown_calls":0,"total_usd":0.21},"calls":1,"prompt_tokens":1200,"completion_tokens":300'
+unpriced='"cost":{"known_usd":0,"unknown_calls":1,"total_usd":null},"calls":2,"prompt_tokens":50,"completion_tokens":5'
+printf '{"cost":{"known_usd":0.21,"unknown_calls":1,"total_usd":null},"models":{"claude-opus-5-5":{%s},"odd|model":{%s}}}\n' \
+  "$priced" "$unpriced" >"$WWW/v1/routing/session-stats"
+printf '{"_devilRoute":{"set":{}},"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:%s"}}\n' "$P" >"$HOST/.claude/settings.local.json"
+python3 -m http.server --bind 127.0.0.1 --directory "$WWW" "$P" >/dev/null 2>&1 &
+SRV=$!
+for _ in $(seq 50); do curl -fs "http://127.0.0.1:$P/health" >/dev/null && break || sleep 0.1; done
+
+review approve
+sid="devil-flow-$(basename "$run")"
+if [ "$rc" -eq 0 ] && argv | grep -A1 -x -- '--model' | sed -n 2p | grep -qx devil-review &&
+  [ "$(sed -n 1p "$FAKE/env")" = "http://127.0.0.1:$P" ] &&
+  grep -qx "x-switchyard-session-id: $sid" "$FAKE/env" && grep -qx 'x-switchyard-origin: devil-flow' "$FAKE/env"; then
+  ok "a routed review goes to the devil-review route, tagged with its own session id"
+else no "routed call: rc=$rc $(tr '\n' ' ' <"$FAKE/env")"; fi
+if jq -e --arg s "$sid" '.review.model == "devil-review" and (.review.cost | .source == "switchyard" and
+  .session == $s and .usd == null and .known_usd == 0.21 and .unknown_calls == 1 and (.models | length) == 2)' \
+  "$run/report.json" >/dev/null &&
+  grep -qF 'Total unknown, 1 call(s) unpriced (priced subtotal $0.2100)' "$run/report.md" &&
+  grep -qxF '| claude-opus-5-5 | 1 | 1200 | 300 | $0.2100 |' "$run/report.md" &&
+  grep -qxF '| odd\|model | 2 | 50 | 5 | unpriced |' "$run/report.md"; then
+  ok "the cost is Switchyard's, per model; an unpriced call leaves the total unknown"
+else no "routed cost: $(jq -c .review.cost "$run/report.json")"; fi
+
+rm "$WWW/v1/routing/session-stats"
+review approve
+if [ "$rc" -eq 0 ] && jq -e '.review.cost | .source == "client" and .usd == 0.0123 and
+  (.note | test("has no record of session devil-flow-"))' "$run/report.json" >/dev/null; then
+  ok "no record in Switchyard falls back to the client estimate, and says so"
+else no "stats fallback: $(jq -c .review.cost "$run/report.json")"; fi
+
+kill "$SRV" && wait "$SRV" 2>/dev/null
+review approve
+if [ "$rc" -eq 3 ] && [ ! -e "$FAKE/argv" ] &&
+  grep -q "^next: review gave no verdict (this project routes through Switchyard at http://127.0.0.1:$P, which is down" "$TMP/out"; then
+  ok "routed with the proxy down is exit 3 before any call, and names the fix"
+else no "routed down: rc=$rc $(grep '^next' "$TMP/out")"; fi
+rm "$HOST/.claude/settings.local.json"
+
 # --- the call kills claude's whole process group when it runs past its timeout ------
-(cd "$TMP" && FLOW_ROOT="$TMP" python3 -I -c '
+(cd "$TMP" && FLOW_ROOT="$TMP" python3 -I -B -c '
 import os, sys
 sys.path.insert(0, sys.argv[1])
 import flow_review

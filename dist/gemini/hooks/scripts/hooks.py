@@ -33,6 +33,7 @@ module named for its concern:
   risk.py     PreToolUse, and the limits of its regex matcher
   gates.py    PostToolUse
   session.py  SessionStart and PreCompact
+  routing.py  is the project routed through a local Switchyard, and is it up
   notify.py   the sounds
   kit.py      plugin root, host root, hooks/config
   respond.py  the JSON answer to the harness

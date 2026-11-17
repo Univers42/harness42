@@ -31,6 +31,7 @@ import sys
 import time
 from pathlib import Path
 
+sys.dont_write_bytecode = True  # keep the kit free of __pycache__, as hooks.py does
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I drops the script dir
 import flow_report  # noqa: E402
 import flow_review  # noqa: E402
