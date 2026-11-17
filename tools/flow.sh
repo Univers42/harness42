@@ -8,7 +8,8 @@
 #
 # The logic is lib/flow.py (stdlib only; 3.11+ for tomllib). This shim finds the kit, the host
 # root and its cache, the same way every other tool does. Runs land in .claude/cache/runs/.
-# Exit: 0 green, 1 a step failed, 2 usage or an invalid flow, 124 a step hit its watchdog.
+# Exit: 0 green, 1 a step failed or the review asked for changes, 2 usage or an invalid flow,
+# 3 the review gave no verdict (fall back to the reviewer agents), 124 a step hit its watchdog.
 # Caveat: the host is the cwd's git toplevel, so run from inside a submodule or a nested repo,
 # the flow checks that inner repo and writes its runs there; cd to the outer root first.
 set -uo pipefail
